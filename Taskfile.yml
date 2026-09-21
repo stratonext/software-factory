@@ -16,6 +16,10 @@ tasks:
   build:
     desc: Build the wheel and sdist into dist/, and check the wheel is usable
     cmds:
+      # uv build adds to dist/, it does not replace it. Left alone, yesterday's wheel is
+      # still there after a version bump - `dist/*.whl` then matches two, which breaks
+      # `task smoke` and would hand `uv publish` a version nobody meant to ship.
+      - rm -rf dist
       - uv build
       # Building is not the same as building something installable: this package is mostly
       # data files, and a wheel without them installs a CLI that cannot resolve a `uses:`.
