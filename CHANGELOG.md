@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format is
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- `sf submit` takes the request as `--description "<request>"` rather than as a bare
+  argument; `--file` is unchanged. A loose word on the command line is now a usage error.
+
 ## [0.0.1rc1] - 2026-09-21
 
 First published build, to TestPyPI. The engine works end to end; the interfaces are

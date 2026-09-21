@@ -5,7 +5,7 @@
 # routed by thresholds this installation already defines. Needs TYPESAFE_API_KEY - without
 # it the gate parks the request rather than guessing.
 #
-# `sf submit "..." --pipeline judged`
+# `sf submit --description "..." --pipeline judged`
 name: judged
 description: >-
   Implement the request, then gate the diff on a TypeSafe judgment: destructive or

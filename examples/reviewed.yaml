@@ -10,7 +10,7 @@
 # `output:` is written by the engine from what a step produced; `input:` is read back into
 # a later agent's prompt. No prompt ever has to say "write your plan to X" or "go read Y".
 #
-# `sf submit "..." --pipeline reviewed`
+# `sf submit --description "..." --pipeline reviewed`
 name: reviewed
 description: >-
   Plan, implement, test, review. Use it for work that needs thinking before the code or a

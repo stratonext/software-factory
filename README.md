@@ -86,7 +86,7 @@ fills in the work.
 Submit **from inside the repo**:
 
 ```bash
-sf submit "add rate limiting to /upload" --name rate-limit --pipeline quick   # -> id 1
+sf submit --description "add rate limiting to /upload" --name rate-limit --pipeline quick   # -> id 1
 sf run                                                     # work everything that is queued
 ```
 
@@ -161,7 +161,7 @@ steps:
     on: { pass: done, fail: code }  # a backwards edge is rework, and costs one pass
 ```
 
-Submit against it with `sf submit "..." --pipeline dev` — the name is the file's, so
+Submit against it with `sf submit --description "..." --pipeline dev` — the name is the file's, so
 `dev.yaml` is `--pipeline dev`. `~/.sf/pipelines/` serves every repo; a `.sf/pipelines/` in a
 repo wins over it, which is how one repo keeps a process of its own. [`examples/`](examples/)
 has four more to copy: implement-and-commit, the full reviewed line, a judged secret
@@ -233,7 +233,7 @@ Jev which pipeline a request belongs in and how hard the agent should think, in 
 before anything is queued, and flag a request too vague for anyone to start on:
 
 ```bash
-sf submit "the upload endpoint 500s on files over 2MB" --pipeline auto --effort auto
+sf submit --description "the upload endpoint 500s on files over 2MB" --pipeline auto --effort auto
 ```
 
 All of it is **opt-in and off by default**: it needs `TYPESAFE_API_KEY`, and without one
@@ -252,7 +252,7 @@ trusted input, and it must never be able to reach the model as an instruction.
 
 ```bash
 sf init                     # create ~/.sf, its config.yaml and its directories
-sf submit "..." --name x    # queue a request against this repo (--file, --pipeline, --run)
+sf submit --description "..." --name x    # queue a request against this repo (--file, --pipeline, --run)
 sf run                      # work the queue (--repo, <id>..., --detach, --note, --stage)
 sf status                   # what is in flight, across every repo (--detailed for the block form)
 sf show 1                   # full state of one request

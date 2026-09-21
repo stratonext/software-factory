@@ -5,7 +5,7 @@
 # `uses:` is who performs a step and `with:` is what they are handed. `next:` is an
 # unconditional edge; `on:` routes on the verdict. `done` is the implicit terminal stage.
 #
-# `sf submit "..." --pipeline dev`
+# `sf submit --description "..." --pipeline dev`
 name: dev
 description: >-
   Implement the request with a coding agent, then commit it. The shortest useful line -

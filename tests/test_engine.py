@@ -341,18 +341,18 @@ def test_concurrency_is_the_flag_then_the_pipeline_then_the_setting(
     (installation / "config.yaml").write_text("concurrency: 3\n")
     monkeypatch.chdir(repo)
 
-    main(["submit", "one", "--name", "one"])
+    main(["submit", "--description", "one", "--name", "one"])
     main(["run"])
     assert sizes[-1] == 3, "the pipeline declares none, so the configured default"
 
     (repo / ".sf" / "pipelines" / "dev.yaml").write_text(yaml.safe_dump(
         {"name": "dev", "concurrency": 4, "steps": {"a": {"uses": "shell", "with": {"run": "true"}, "next": "done"}}}
     ))
-    main(["submit", "two", "--name", "two"])
+    main(["submit", "--description", "two", "--name", "two"])
     main(["run"])
     assert sizes[-1] == 4, "the pipeline's own key, which the setting used to shadow"
 
-    main(["submit", "three", "--name", "three"])
+    main(["submit", "--description", "three", "--name", "three"])
     main(["run", "--concurrency", "2"])
     assert sizes[-1] == 2, "an explicit --concurrency beats both"
 
