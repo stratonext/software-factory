@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=../../docs/pipeline-schema.yaml
+#
+# Implement, then let a typed judgment decide whether a person has to look before this is
+# committed. The gate is the cheap version of a reviewer: four questions about the diff,
+# routed by thresholds this installation already defines. Needs TYPESAFE_API_KEY - without
+# it the gate parks the request rather than guessing.
+#
+# `sf submit "..." --pipeline judged`
+name: judged
+description: >-
+  Implement the request, then gate the diff on a TypeSafe judgment: destructive or
+  out-of-scope work parks for a human, work that does not implement the request goes back
+  to the coder, everything else commits. Needs TYPESAFE_API_KEY.
+version: 1
+max_passes: 2          # rework round-trips before a human is asked instead
+concurrency: 2
+start: code
+
+steps:
+  code:
+    name: Implement it
+    uses: claude
+    with:
+      prompt: prompts/code.md
+    # gate.md exists only on a rework pass; an input that is not there yet is skipped.
+    input: gate.md
+    output: code.md
+    next: gate
+
+  gate:
+    name: Does this need a human
+    uses: typesafe
+    with:
+      questions: prompts/human-review.yaml
+    output: gate.md                      # the numbers and the rule that fired, for replay
+    on: { pass: commit, fail: code }     # `human` is never routed - it parks
+
+  commit:
+    name: Commit the work
+    uses: shell
+    with:
+      run: "git add -A && git diff --cached --quiet || git commit -m 'sf: implement the request'"
+    on: { pass: done }
