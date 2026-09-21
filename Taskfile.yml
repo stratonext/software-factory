@@ -1,0 +1,61 @@
+# Every task is the same command CI runs. `uv run` syncs the environment first,
+# so there is no separate install step to forget.
+version: '3'
+
+tasks:
+  default:
+    cmds:
+      - task --list
+    silent: true
+
+  compile:
+    desc: Type-check with mypy - also the syntax check, since mypy parses everything
+    cmds:
+      - uv run mypy
+
+  build:
+    desc: Build the wheel and sdist into dist/, and check the wheel is usable
+    cmds:
+      - uv build
+      # Building is not the same as building something installable: this package is mostly
+      # data files, and a wheel without them installs a CLI that cannot resolve a `uses:`.
+      - uv run --no-project python scripts/check_dist.py
+
+  smoke:
+    desc: Install the built wheel into a throwaway venv and run the CLI from it
+    cmds:
+      - rm -rf .smoke && uv venv --quiet .smoke
+      - uv pip install --quiet --python .smoke/bin/python dist/*.whl
+      # --version proves the console script exists; `runners` proves the packaged data
+      # files are readable from an installed wheel, not just present in the zip.
+      - .smoke/bin/sf --version
+      - .smoke/bin/sf runners
+      - rm -rf .smoke
+
+  run:
+    desc: Run the CLI locally. Pass arguments after `--`, e.g. `task run -- status`
+    cmds:
+      - uv run sf {{.CLI_ARGS}}
+
+  test:
+    desc: Run the test suite
+    cmds:
+      - uv run pytest -q
+
+  lint:
+    desc: Lint with ruff - zero warnings required
+    cmds:
+      - uv run ruff check
+
+  verify:
+    desc: Everything CI runs on a push except the wheel build - what the pre-commit hook runs
+    cmds:
+      - task: lint
+      - task: compile
+      - task: test
+
+  setup:
+    desc: Point git at .githooks/, so every commit is verified before it is made
+    cmds:
+      - git config core.hooksPath .githooks
+      - echo "hooks installed - .githooks/pre-commit runs on every commit ('git commit -n' skips it)"

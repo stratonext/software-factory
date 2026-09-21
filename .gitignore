@@ -1,0 +1,23 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Factory state (work items, worktrees, agent logs)
+_FACTORY/
+
+# Tool caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Editor and agent scratch, local to whoever is working here
+.zed/
+_AGENT/
+_FACTORY/

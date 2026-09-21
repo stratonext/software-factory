@@ -1,0 +1,5 @@
+# The judge: typed questions to TypeSafe's System One model instead of an agent's prose.
+name: typesafe
+description: TypeSafe System One (Jev) typed judgments
+kind: judge
+requires: [questions]

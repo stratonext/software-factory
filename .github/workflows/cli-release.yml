@@ -1,0 +1,104 @@
+name: CD | CLI | Release
+
+# Tag-driven release of the `sf` CLI, published to PyPI as `software-factory`.
+#   v0.1.0     -> prod:        build -> PyPI     -> GitHub Release
+#   v0.1.0rc1  -> pre-release: build -> TestPyPI -> prerelease GitHub Release
+#
+# Publishing is gated on the full CI suite. The version is NOT derived from the tag:
+# pyproject.toml carries it (hatchling, static), so the tag is checked against it and a
+# mismatch fails the release. Deriving it would let `v9.9.9` ship a wheel saying 0.0.1.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  gate:                       # the real CI, not a second copy of it
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: gate
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      prerelease: ${{ steps.ver.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.14
+      # The tag is a claim about what pyproject already says. Checking beats deriving:
+      # the version ends up in the wheel, the dist-info and `sf --version`, and those
+      # must agree with the tag someone will later `git checkout`.
+      - name: Check the tag matches pyproject.toml
+        id: ver
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"                    # v0.1.0rc1 -> 0.1.0rc1
+          PYPROJECT=$(uv run --no-project python -c \
+            'import tomllib,sys; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
+          if [ "$TAG" != "$PYPROJECT" ]; then
+            echo "::error::tag v$TAG does not match pyproject.toml version $PYPROJECT."
+            echo "::error::Bump pyproject.toml (and CHANGELOG.md) first, then re-tag."
+            exit 1
+          fi
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+          # aN / bN / rcN suffix => pre-release, which goes to the TestPyPI track.
+          if [[ "$TAG" =~ (a|b|rc)[0-9]+$ ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: arduino/setup-task@v2
+      - run: uv sync
+      # The same `task build` CI runs: builds, then checks the wheel carries the runners,
+      # the pipelines, the prompts and the `sf` entry point. One definition, so the thing
+      # verified on every push is the thing verified before an upload.
+      - name: Build and verify the distribution
+        run: task build
+      - name: Install the wheel into a clean venv and run it
+        run: task smoke
+      - name: What the sdist contains
+        run: for f in dist/*.tar.gz; do echo "== $f"; tar tzf "$f"; done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    # Trusted Publishing mints an OIDC token scoped to this project, so there is no API
+    # token to store or rotate. The environment selects which index: configure `pypi` and
+    # `testpypi` on the repo, each with a trusted publisher pointing at this workflow.
+    environment: ${{ needs.build.outputs.prerelease == 'true' && 'testpypi' || 'pypi' }}
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Publish software-factory
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          repository-url: ${{ needs.build.outputs.prerelease == 'true' && 'https://test.pypi.org/legacy/' || 'https://upload.pypi.org/legacy/' }}
+
+  github-release:
+    needs: [build, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/software_factory-*
+          prerelease: ${{ needs.build.outputs.prerelease == 'true' }}
+          generate_release_notes: true

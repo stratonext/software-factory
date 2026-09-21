@@ -1,0 +1,25 @@
+name: claude
+description: Claude Code CLI, non-interactive. The default runner.
+kind: agent               # the factory builds a command line and reads the reply
+requires: [prompt]        # the with: key this runner cannot work without
+
+# `{prompt}` is the assembled prompt text, not a path: the step names a file, the engine
+# reads it and appends the request, the inputs, the notes and the verdict block first.
+# Substituted into one argv element and exec'd as a list - never through a shell.
+command: [claude, -p, "{prompt}",
+          --output-format, json,
+          --permission-mode, bypassPermissions]
+
+output:
+  format: json            # json | text
+  text: result            # where the reply lives in the response
+  session: session_id     # the conversation the next run of this stage can resume
+  cost: total_cost_usd    # omitted by the CLI under subscription auth, so often absent
+  error: is_error
+
+# Appended only when the step asks for them. A runner that omits one of these ignores the
+# step's request for it and says so, rather than failing.
+options:
+  model:  [--model, "{model}"]
+  effort: [--effort, "{effort}"]
+  resume: [--resume, "{session}"]

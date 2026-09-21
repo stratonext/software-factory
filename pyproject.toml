@@ -1,0 +1,70 @@
+[project]
+name = "software-factory"
+version = "0.0.1"
+description = "An agent software factory: requests flow through YAML-defined pipelines of agent, command and judge steps."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Stratonext", email = "info@stratonext.com" }]
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["agents", "claude", "pipeline", "automation", "cli", "code-review"]
+# No "License :: OSI Approved ::" classifier: PEP 639 forbids one alongside the SPDX
+# `license` expression above, and PyPI rejects an upload carrying both.
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development",
+    "Topic :: Software Development :: Build Tools",
+]
+# rich is imported directly by src/__main__.py; typer happens to pull it in, but
+# that is typer's choice to change, not ours.
+dependencies = ["pyyaml>=6", "typer>=0.12.1", "rich>=13"]
+
+[project.urls]
+Homepage = "https://github.com/stratonext/software-factory"
+Repository = "https://github.com/stratonext/software-factory"
+Issues = "https://github.com/stratonext/software-factory/issues"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.3.1",
+    "pytest>=8",
+    "ruff>=0.14",
+    "types-pyyaml>=6.0.12.20260906",
+]
+
+[project.scripts]
+sf = "software_factory.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["software_factory"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+# Bugs only. The stylistic families stay out on purpose: this code writes its strings with
+# %-formatting (UP031 would rewrite every one of them) and wraps its own long lines.
+select = ["A", "B006", "E4", "E7", "E9", "F"]
+# typer names a CLI argument after its parameter, so `id` is the word the user types.
+ignore = ["A002"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["software_factory", "tests"]
+# Bodies of unannotated functions stay unchecked for now: 54 of them predate this
+# config, and annotating them is its own change. Turn on disallow_untyped_defs once
+# that is done - it is what enforces the "fully typed" rule.
+warn_unused_ignores = true
+warn_redundant_casts = true

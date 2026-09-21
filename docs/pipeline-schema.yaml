@@ -1,0 +1,244 @@
+# JSON Schema (draft 2020-12) for a factory pipeline file, written in YAML.
+#
+# Point an editor at it with a first line in the pipeline file:
+#   # yaml-language-server: $schema=../docs/pipeline-schema.yaml
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://github.com/stratonext/software-factory/docs/pipeline-schema.yaml
+title: factory pipeline
+type: object
+required: [steps]
+additionalProperties: false
+
+properties:
+  name:
+    type: string
+    description: The pipeline's name. Defaults to the file name.
+  description:
+    type: string
+    description: >-
+      One or two sentences of prose: what this pipeline is for and when to use it. Written
+      for whoever is choosing a pipeline - a person reading `sf config`, or an agent
+      picking one for a request - so it should say more than the name does. Nothing routes
+      on it; `sf config --json` carries it beside the name and version.
+  version:
+    type: integer
+    minimum: 1
+    default: 1
+    description: >-
+      Bump it whenever you change this file. Requests record the version of each step
+      they ran, so `sf status` shows `dev@1,2` for a request that spanned an edit.
+  max_passes:
+    type: integer
+    minimum: 0
+    default: 3
+    description: Rework round-trips allowed before the request parks for a human.
+  concurrency:
+    type: integer
+    minimum: 1
+    description: >-
+      How many requests the engine works in parallel. Omitted, the configured
+      `concurrency` applies; `sf run --concurrency N` beats both.
+  start:
+    type: string
+    description: The first stage. Defaults to the first key under `steps`.
+  env:
+    type: object
+    description: >-
+      Environment for every step's subprocess, layered over the engine's own. A step's own
+      `env:` wins. Nothing here is expanded or shell-interpreted.
+    additionalProperties: {type: [string, number, boolean]}
+  steps:
+    type: object
+    minProperties: 1
+    description: >-
+      Declaration order is the rank: an edge to a later step is the happy path, an edge
+      to an equal-or-earlier step is rework and costs one pass.
+    additionalProperties:
+      $ref: "#/$defs/step"
+
+$defs:
+  step:
+    type: object
+    additionalProperties: false
+    # At least one of next:/on:. What a step may put in `with:` depends on the runner its
+    # `uses:` names, which only the loader can check - a schema cannot read another file.
+    anyOf:
+      - required: [next]
+      - required: ["on"]   # quoted: YAML 1.1 reads a bare `on` as the boolean True
+    properties:
+      name:
+        type: string
+        description: >-
+          A human label for this station, shown by `status` and `replay` instead of the key.
+          Nothing routes on it: edges, `input:`/`output:` and `resume: <stage>` all name the
+          key.
+      uses:
+        type: string
+        description: >-
+          Which runner performs this step - a YAML file resolved from the repo's `agents/`,
+          then the installation's, then the packaged ones (`claude`, `shell`, `typesafe`).
+          Omitted, the configured default runner applies. An unknown name fails at load.
+      with:
+        type: object
+        description: >-
+          What this step hands its runner: `prompt:` for an agent, `run:` for `shell`,
+          `questions:` for `typesafe`, plus `effort:` and `model:` where the runner declares
+          it can express them. The loader rejects a key the named runner does not take.
+        properties:
+          prompt:
+            type: string
+            description: Prompt file, relative to this pipeline file.
+          run:
+            type: string
+            description: Shell command. Exit 0 is a pass; it may also print a verdict object.
+          questions:
+            type: string
+            description: >-
+              Questions file, relative to this pipeline file: state recipe, typed questions
+              and the rules that turn the answers into a verdict. See `judge_file` below.
+          effort:
+            enum: [low, medium, high, xhigh, max]
+            description: >-
+              How hard this stage's agent thinks. Omitted, the tool's own default applies;
+              a runner that cannot express it ignores it and records that it did. Put the
+              cheap stages low.
+          model:
+            type: string
+            description: >-
+              The model this stage asks its runner for. Not validated - model names are the
+              tool's business, not the factory's.
+      env:
+        type: object
+        description: >-
+          Environment for this step's subprocess, over the pipeline's own `env:`.
+        additionalProperties: {type: [string, number, boolean]}
+      next:
+        $ref: "#/$defs/stage"
+        description: Unconditional edge, followed when this step passes.
+      "on":
+        type: object
+        minProperties: 1
+        description: Edges by verdict. `human` is never routed - it halts.
+        propertyNames:
+          enum: [pass, fail]
+        additionalProperties:
+          $ref: "#/$defs/stage"
+      input:
+        description: Scratch file name(s), read from _FACTORY/ into an agent's prompt.
+        oneOf:
+          - $ref: "#/$defs/scratch_file"
+          - type: array
+            items: {$ref: "#/$defs/scratch_file"}
+      output:
+        $ref: "#/$defs/scratch_file"
+        description: Scratch file the engine writes with whatever this step produced.
+      resume:
+        description: >-
+          Which agent session this step picks up. `true` (the default) resumes the last
+          session any stage left behind, so the line is one conversation and earlier
+          context is not paid for again; a stage name resumes that stage's own last
+          session; `false` starts cold.
+        oneOf:
+          - type: boolean
+          - $ref: "#/$defs/stage"
+      review:
+        type: boolean
+        default: false
+        description: Park for a human after this step, whatever verdict it returned.
+
+  # The file `with: {questions: ...}` points at on a `uses: typesafe` step. Not a pipeline
+  # file - a second document, validated here for the same reason as the first: an editor
+  # should catch `critera:` before a run does.
+  judge_file:
+    type: object
+    required: [questions, route]
+    additionalProperties: false
+    properties:
+      model:
+        type: string
+        description: >-
+          Provider model id, for this step only. Defaults to `typesafe.model` in
+          ~/.sf/config.yaml, which defaults to `jev-latest`.
+      state:
+        type: object
+        description: >-
+          name -> shell command, run in the worktree; its output becomes that named field of
+          the state. `request`, the accumulated `notes` and any declared `input:` files (under
+          their stem) are always present without being declared here.
+        additionalProperties: {type: string}
+      questions:
+        type: object
+        minProperties: 1
+        description: >-
+          id -> one typed question. Ids are for the `route:` rules below and are never sent to
+          the model, so the meaning has to be complete in `instructions`.
+        additionalProperties:
+          type: object
+          required: [type, instructions]
+          properties:
+            type: {enum: [noul, choice, score]}
+            instructions:
+              description: The judgment, referencing state fields by name.
+              oneOf: [{type: string}, {type: object}, {type: array}]
+            criteria:
+              description: >-
+                choice - a map of option to what it means; score - an ordered list of level
+                descriptions; noul - optional clarification of what yes and no mean.
+              oneOf: [{type: object}, {type: array}, {type: "null"}]
+      route:
+        type: array
+        minItems: 1
+        description: >-
+          Ordered rules; the first that matches decides. A rule with no `when:` is the default
+          and belongs last. A question that goes unanswered, or no rule matching at all, parks
+          the request - the factory never guesses a verdict.
+        items:
+          type: object
+          required: [verdict]
+          additionalProperties: false
+          properties:
+            when:
+              type: string
+              description: The question id this rule reads. Omit for the default rule.
+            above:
+              $ref: "#/$defs/threshold"
+              description: Fires when the noul probability or the score is greater than this.
+            below:
+              $ref: "#/$defs/threshold"
+              description: Fires when the noul probability or the score is less than this.
+            equals:
+              description: Fires when a choice answer is this option.
+            confidence_below:
+              $ref: "#/$defs/threshold"
+              description: >-
+                Fires when the answer's confidence is under this - how an uncertain judgment
+                becomes its own outcome rather than a coin flip.
+            verdict:
+              enum: [pass, fail, human]
+              description: What this rule decides. Anything else parks rather than inventing an edge.
+            notes:
+              type: string
+              description: Appended to the recorded reason, after the comparison that fired.
+
+  threshold:
+    description: >-
+      A number, or `$name` for one of `typesafe.thresholds` in ~/.sf/config.yaml - so an
+      installation retunes every gate that names it from one place, while a rule that writes a
+      literal keeps its own. A `$name` the config does not define parks the request; it is
+      never read as zero.
+    oneOf:
+      - type: number
+      - type: string
+        pattern: "^\\$[A-Za-z_][A-Za-z0-9_]*$"
+
+  stage:
+    type: string
+    description: Another step's name, or `done`.
+
+  scratch_file:
+    type: string
+    # A pipeline file is a trust boundary: `output: ../../.ssh/config` must not escape
+    # _FACTORY/. The loader rejects it too; this keeps an editor from suggesting it.
+    pattern: "^[^/\\\\]+$"
+    not:
+      enum: [".", ".."]

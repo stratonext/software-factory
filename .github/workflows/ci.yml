@@ -1,0 +1,61 @@
+# Every push and every pull request: the suite on each Python the project claims, and the
+# linter once - it has nothing to say that depends on the interpreter.
+name: CI
+
+# workflow_call as well, so the release workflow gates on this exact suite rather than
+# keeping a second copy of it that drifts.
+on:
+  push:
+  pull_request:
+  workflow_call:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: arduino/setup-task@v2
+      - run: uv sync --python ${{ matrix.python }}
+      - run: task compile
+      - run: task test
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: arduino/setup-task@v2
+      - run: uv sync
+      - run: task lint
+
+  # A green suite says the code works from a source checkout. It says nothing about the
+  # artifact people actually install - this package is mostly data files (the built-in
+  # runners, the shipped pipelines and their prompts), and every one of them has to be
+  # inside the wheel and readable once installed. Both halves have broken here before: the
+  # pipelines vanished from the package during a rename, and the console script pointed at
+  # a module that no longer existed, so `sf` was not a command at all.
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: arduino/setup-task@v2
+      - run: uv sync
+      # Builds the sdist and wheel, then asserts the wheel carries what the CLI reads at
+      # run time and declares the `sf` entry point. See scripts/check_dist.py.
+      - run: task build
+      # And the part a file listing cannot prove: install that wheel into a clean venv and
+      # run the CLI out of it. `sf runners` resolves the packaged runner definitions, so it
+      # fails if the data files are present but unreadable from an installed layout.
+      - run: task smoke
+      - name: What the sdist contains
+        run: for f in dist/*.tar.gz; do echo "== $f"; tar tzf "$f"; done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

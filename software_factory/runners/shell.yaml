@@ -1,0 +1,10 @@
+# An ordinary command, for the stages that are not agents at all: a test suite, a linter,
+# a policy script. Exit 0 is a pass, anything else a fail - and it may print a verdict
+# object on stdout to flag for a human instead.
+#
+# Implemented in Python rather than as a command: template, because `sh -c` needs the
+# string unsplit. It is registered by name so `uses:` has one meaning everywhere.
+name: shell
+description: An ordinary shell command, run in the request's worktree.
+kind: command
+requires: [run]

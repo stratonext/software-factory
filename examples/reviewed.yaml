@@ -1,0 +1,63 @@
+# yaml-language-server: $schema=../docs/pipeline-schema.yaml
+#
+# The full line: think, build, prove, check.
+#
+# Declaration order is the rank. An edge to a later step is a forward edge - the happy path
+# is a DAG. An edge to an equal-or-earlier step is REWORK: allowed, but it carries the
+# step's notes back with it and costs one pass. More than `max_passes` of those and the
+# request parks for a human instead of looping forever.
+#
+# `output:` is written by the engine from what a step produced; `input:` is read back into
+# a later agent's prompt. No prompt ever has to say "write your plan to X" or "go read Y".
+#
+# `sf submit "..." --pipeline reviewed`
+name: reviewed
+description: >-
+  Plan, implement, test, review. Use it for work that needs thinking before the code or a
+  second pair of eyes after it - a feature, a non-trivial bug fix, anything touching more
+  than one file. Failing tests and a rejecting review both send the work back to the coder.
+version: 1
+max_passes: 3          # rework round-trips before a human is asked instead
+concurrency: 2
+start: plan
+
+steps:
+  plan:
+    name: Write the plan
+    uses: claude
+    with:
+      prompt: prompts/plan.md
+    output: plan.md
+    next: code
+
+  code:
+    name: Implement it
+    uses: claude
+    with:
+      prompt: prompts/code.md
+    # review.md exists only on a rework pass; an input that is not there yet is skipped.
+    input: [plan.md, review.md]
+    output: code.md
+    next: test
+
+  test:
+    name: Run the tests
+    uses: shell
+    with:
+      # Edit this line to match your repo. The engine runs detached with the login shell's
+      # PATH, which is usually not the repo's venv - so decide there is a suite first, then
+      # pick the runner, and a repo without tests reads "no test suite" instead of failing.
+      run: "if [ ! -d tests ] && ! ls test_*.py >/dev/null 2>&1; then echo 'no test suite'; elif [ -x .venv/bin/pytest ]; then .venv/bin/pytest -q; else pytest -q; fi"
+    output: test.log
+    on: { pass: review, fail: code }     # a backwards edge is rework, and costs one pass
+
+  review:
+    name: Review the diff
+    uses: claude
+    with:
+      prompt: prompts/review.md
+    resume: false                        # cold on purpose: a reviewer continuing the
+                                         # coder's session would be reviewing its own work
+    input: [plan.md, test.log]
+    output: review.md
+    on: { pass: done, fail: code }

@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=../docs/pipeline-schema.yaml
+#
+# All the way out: implement, commit, and open the pull request.
+#
+# Each request is worked in its own git worktree on its own branch (`sf/<id>`), so pushing
+# that branch and opening a PR from it is the natural last stage. Needs the GitHub CLI
+# installed and authenticated (`gh auth login`) and a remote you can push to.
+#
+# `sf submit "..." --pipeline ship`
+name: ship
+description: >-
+  Implement the request, commit it, push the request's own branch and open a pull request
+  with the GitHub CLI. Use it when review happens on GitHub rather than inside the
+  pipeline. Needs `gh` installed and authenticated.
+version: 1
+max_passes: 0
+concurrency: 2
+start: code
+
+steps:
+  code:
+    name: Implement it
+    uses: claude
+    with:
+      prompt: prompts/code.md
+    output: code.md
+    next: commit
+
+  commit:
+    name: Commit the work
+    uses: shell
+    with:
+      run: "git add -A && git diff --cached --quiet || git commit -m 'sf: implement the request'"
+    next: pr
+
+  pr:
+    name: Open the pull request
+    uses: shell
+    with:
+      # HEAD pushes the request's own branch under its own name. --fill takes the title and
+      # body from the commits, so nothing here has to know what the request was. Already
+      # opened one? `gh` says so and exits non-zero, so report the URL either way.
+      run: "git push -u origin HEAD && (gh pr create --fill || gh pr view --json url -q .url)"
+    output: pr.log
+    on: { pass: done }

@@ -1,0 +1,35 @@
+# yaml-language-server: $schema=../docs/pipeline-schema.yaml
+#
+# The shortest line there is: one agent, then a commit.
+#
+# `uses:` is who performs a step and `with:` is what they are handed. `next:` is an
+# unconditional edge; `on:` routes on the verdict. `done` is the implicit terminal stage.
+#
+# `sf submit "..." --pipeline dev`
+name: dev
+description: >-
+  Implement the request with a coding agent, then commit it. The shortest useful line -
+  no plan, no tests, no review. Use it for small, precisely stated changes where a
+  planning and a review call would cost more than the change itself.
+version: 1
+max_passes: 0          # nothing routes backwards here
+concurrency: 2         # requests worked in parallel; one subscription, so keep it modest
+start: code
+
+steps:
+  code:
+    name: Implement it
+    uses: claude
+    with:
+      prompt: prompts/code.md     # a path, relative to this file
+    output: code.md               # what it produced, for later steps and for `sf replay`
+    next: commit
+
+  commit:
+    name: Commit the work
+    uses: shell                   # an ordinary command, run in the request's worktree
+    with:
+      # `git diff --cached --quiet` exits 0 when nothing is staged, so an agent that
+      # already committed leaves this step a no-op instead of a failure.
+      run: "git add -A && git diff --cached --quiet || git commit -m 'sf: implement the request'"
+    on: { pass: done }
