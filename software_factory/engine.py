@@ -96,6 +96,13 @@ def _walk(backend, pipe, item, step_timeout, agent_attempts, retry_wait, max_inp
         if backend.load(item["id"])["status"] == "cancelled":
             return _stop(backend, item, "cancelled", "")
         stage = item["stage"]
+        if stage not in pipe.steps:
+            # `--stage` into a name this pipeline never declared, or one it declared when
+            # the request started and no longer does. Park rather than raise: the KeyError
+            # this replaces escaped the worker and left the item claimed and `running`,
+            # which no command could recover.
+            return _stop(backend, item, "needs_human",
+                         "pipeline '%s' has no stage '%s'" % (pipe.name, stage))
         step = pipe.steps[stage]
         step_no = len(item["history"]) + 1
         started, clock = now(), time.monotonic()

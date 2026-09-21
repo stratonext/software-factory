@@ -506,6 +506,11 @@ def test_status_shows_every_version_a_request_ran_under(installation, tmp_path, 
     main(["status"])
     assert "dev@1,2" in capsys.readouterr().out, "both versions, in the order they ran"
 
+    assert main(["run", "1", "--stage", "nope"]) == 1, "a stage that is not one"
+    err = capsys.readouterr().err
+    assert "no stage 'nope'" in err and "a, b" in err, "and the stages there are"
+    assert backend.load("1")["status"] == "done", "rejected before anything was unparked"
+
     capsys.readouterr()
     main(["config"])
     assert "dev v2" in capsys.readouterr().out, "info lists what is on disk now"

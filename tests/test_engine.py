@@ -281,6 +281,18 @@ def test_one_unloadable_pipeline_fails_its_own_item_only(tmp_path):
 
 
 
+def test_a_stage_the_pipeline_does_not_declare_parks(tmp_path):
+    """It used to raise out of the worker and leave the item claimed and `running`."""
+    backend, pipelines = build(tmp_path, steps={"a": sh("true", next="done")})
+    item = backend.create("r", "t", "a")
+    item["stage"] = "nope"          # `--stage nope`, or a stage edited out mid-flight
+    backend.save(item)
+
+    worked = engine.run(backend, pipelines)
+    assert worked[0]["status"] == "needs_human"
+    assert "no stage 'nope'" in worked[0]["reason"]
+
+
 def test_the_route_marks_a_halt_in_the_middle_of_a_run(tmp_path, capsys):
     """History is cumulative, so a halted step that got no separator of its own had the
     next run's stage concatenated onto it: `test -> reviewtest ~~> code`."""

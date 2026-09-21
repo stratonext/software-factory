@@ -321,7 +321,7 @@ def run(
     ids = list(ids or [])
     # Unpark before deciding to detach: a parked request is not queued, so the detached
     # path below would report "nothing queued" and drop --note on the floor.
-    problem = _unpark(backend, ids, note, stage)
+    problem = _unpark(backend, ids, note, stage, settings)
     if problem:
         fail(problem)
     if detach:
@@ -410,7 +410,7 @@ def _detach(settings, ids, repo, concurrency):
     return log
 
 
-def _unpark(backend, ids, note, stage):
+def _unpark(backend, ids, note, stage, settings):
     """Naming a parked request means "unpark it and work it". Returns a problem, or None.
 
     `--note` and `--stage` are how you answer the agent, so they need an id: applying a
@@ -419,7 +419,7 @@ def _unpark(backend, ids, note, stage):
     """
     if (note or stage) and not ids:
         return "--note/--stage needs a request id: which request?"
-    items = []
+    items, cache = [], {}
     for i in ids:
         try:
             item = backend.load(i)
@@ -428,6 +428,13 @@ def _unpark(backend, ids, note, stage):
         if item["stage"] == pl.DONE and not stage:
             # The engine has no step called `done` to re-enter; say so instead of raising.
             return "%s is finished - `--stage <stage>` to re-enter it" % item["id"]
+        # Every named request checked before any of them is unparked, and checked here
+        # rather than left to the engine's guard: `--stage` is how an earlier stage is
+        # re-entered, so a typo should answer with the stages there are.
+        pipe = _pipeline_of(item, settings, cache) if stage else None
+        if pipe and stage != pl.DONE and stage not in pipe.steps:
+            return "%s: pipeline '%s' has no stage '%s' - one of: %s" % (
+                item["id"], pipe.name, escape(stage), ", ".join(pipe.steps))
         items.append(item)
     for item in items:
         if stage:
@@ -457,12 +464,12 @@ def _pipeline_cell(item):
     """
     seen = dict.fromkeys(str(h["version"]) for h in item["history"] if "version" in h)
     return item["pipeline"] + ("@%s" % ",".join(seen) if seen else "")
-def _stage_label(item, settings, cache):
-    """`code 2/5` - the stage, and where it sits in its pipeline's declared order.
+def _pipeline_of(item, settings, cache):
+    """The request's pipeline as it is on disk now, or None if it cannot be read.
 
-    Falls back to the bare stage name when the pipeline cannot be read (repo moved,
-    YAML broken) or no longer has the stage (`--stage` into a since-edited pipeline):
-    status is the read-only overview and must not traceback over someone else's repo.
+    Keyed by (repo, name): two requests may name the same pipeline and mean two different
+    files. None is a real answer - the repo may have moved or the YAML may be broken, and
+    neither the status table nor an unpark check may traceback over someone else's repo.
     """
     key = (item.get("repo", ""), item["pipeline"])
     if key not in cache:
@@ -473,7 +480,17 @@ def _stage_label(item, settings, cache):
             )
         except Exception:
             cache[key] = None
-    pipe = cache[key]
+    return cache[key]
+
+
+def _stage_label(item, settings, cache):
+    """`code 2/5` - the stage, and where it sits in its pipeline's declared order.
+
+    Falls back to the bare stage name when the pipeline cannot be read (repo moved,
+    YAML broken) or no longer has the stage (`--stage` into a since-edited pipeline):
+    status is the read-only overview and must not traceback over someone else's repo.
+    """
+    pipe = _pipeline_of(item, settings, cache)
     if pipe is None:
         return item["stage"]
     total, rank = len(pipe.steps), pipe.rank.get(item["stage"], -1)
