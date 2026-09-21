@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format is
 
 ## [Unreleased]
 
+### Changed
+- Every destructive command asks `y/N` before it acts, defaulting to No: `sf delete` and
+  `sf cancel` now prompt as `sf prune` did, and `sf prune` asks however few requests are
+  doomed rather than only past a handful. `--yes`/`-y` skips the question on all three,
+  and so does a stdin that is not a terminal, so piped and scripted runs are unaffected.
+
 ## [0.0.2rc1] - 2026-09-21
 
 ### Changed
