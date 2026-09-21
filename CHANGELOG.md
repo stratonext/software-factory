@@ -6,9 +6,19 @@ All notable changes to this project are documented here. The format is
 
 ## [Unreleased]
 
+## [0.0.2rc1] - 2026-09-21
+
 ### Changed
 - `sf submit` takes the request as `--description "<request>"` rather than as a bare
   argument; `--file` is unchanged. A loose word on the command line is now a usage error.
+
+### Fixed
+- Help text, option help and comments called the executable `factory`; it has been `sf`
+  since 0.0.1. Every command reference now names `sf`, as does the `sf/<id>` worktree
+  branch the docs describe.
+- `test_worktree_survives_a_reused_branch_name` pre-created a `factory/1` branch, so the
+  name it was meant to collide with was never the one `workspace()` creates. It now
+  creates `sf/1`, which is the collision the test claims to cover.
 
 ## [0.0.1rc1] - 2026-09-21
 

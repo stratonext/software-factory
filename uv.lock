@@ -459,7 +459,7 @@ wheels = [
 
 [[package]]
 name = "software-factory"
-version = "0.0.1"
+version = "0.0.2rc1"
 source = { editable = "." }
 dependencies = [
     { name = "pyyaml" },
