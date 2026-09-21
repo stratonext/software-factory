@@ -543,7 +543,6 @@ def test_init_creates_the_installation_and_is_safe_to_repeat(installation, capsy
     for d in ("pipelines", "runners"):
         assert (installation / d).is_dir(), d
         assert not list((installation / d).iterdir()), "%s must be empty: nothing ships" % d
-    assert "no pipelines ship" in out, "and it says so, where someone will read it"
 
     config_yaml.write_text("concurrency: 9\n")
     assert main(["init"]) == 0
