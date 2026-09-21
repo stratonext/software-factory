@@ -47,6 +47,15 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["software_factory"]
 
+# An allowlist, not a list of exclusions: hatchling ships everything git tracks by default,
+# so every directory the repo grows would end up inside the sdist uninvited - the CI
+# workflows, the git hooks, the Taskfile, the lock file, the factory's own .sf/ pipelines.
+# What is here is what builds the wheel, plus the files a release has to carry. The tests
+# and docs are out on purpose: tests/test_docs.py reads the repository - README links into
+# .github/ and .githooks/ - so it fails from anywhere that is not a checkout.
+[tool.hatch.build.targets.sdist]
+include = ["/software_factory", "/README.md", "/CHANGELOG.md"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
