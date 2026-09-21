@@ -254,7 +254,7 @@ trusted input, and it must never be able to reach the model as an instruction.
 sf init                     # create ~/.sf, its config.yaml and its directories
 sf submit "..." --name x    # queue a request against this repo (--file, --pipeline, --run)
 sf run                      # work the queue (--repo, <id>..., --detach, --note, --stage)
-sf status                   # what is in flight, across every repo
+sf status                   # what is in flight, across every repo (--detailed for the block form)
 sf show 1                   # full state of one request
 sf replay 1                 # play a run back (--step, --json)
 sf config                   # the settings in effect, and where they would be changed

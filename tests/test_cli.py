@@ -76,7 +76,7 @@ def test_cost_is_optional_and_totalled_per_pipeline(tmp_path, capsys, monkeypatc
 
     main(["--backend", str(tmp_path / "state"), "status"])
     out = capsys.readouterr().out
-    assert "cost:" in out and "$0.00" not in out
+    assert "COST" in out and "$0.00" not in out
 
     # An agent step does report one, and it lands on the line and in the total.
     (tmp_path / "two").mkdir()
@@ -168,7 +168,7 @@ def test_status_lists_every_repo_in_flight(installation, tmp_path, monkeypatch, 
 
     main([])  # bare `factory`
     out = capsys.readouterr().out
-    assert "repo:" in out and "pipeline:" in out and "stage:" in out
+    assert "REPO" in out and "PIPELINE" in out and "STAGE" in out, "the table is the default"
     assert "alpha" in out and "beta" in out, "one installation, many repos"
 
 
@@ -464,9 +464,16 @@ def test_status_keeps_one_line_per_item(installation, tmp_path, monkeypatch, cap
 
     main(["status"])
     lines = [line for line in capsys.readouterr().out.splitlines() if line.strip()]
-    assert len(lines) == 3, "one block per item, whatever the reason's length"
-    assert lines[0].startswith("1") and lines[0].endswith(item["reason"])
-    assert lines[0] == lines[0].rstrip(), "no trailing padding"
+    assert len(lines) == 2, "a header and one line per item, whatever the reason's length"
+    assert lines[0].startswith("REQUEST"), "the table is what `status` prints by default"
+    assert lines[1].startswith("1") and lines[1].endswith(item["reason"])
+    assert lines[1] == lines[1].rstrip(), "no trailing padding"
+
+    capsys.readouterr()
+    main(["status", "--detailed"])
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.strip()]
+    assert len(lines) == 3, "-d is the block form: three lines for the one item"
+    assert "repo:" in lines[1] and "request:" in lines[2]
 
 
 def test_status_shows_every_version_a_request_ran_under(installation, tmp_path, monkeypatch, capsys):

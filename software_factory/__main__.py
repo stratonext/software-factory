@@ -131,7 +131,7 @@ def root(
     if ctx.invoked_subcommand is None:
         # json_ spelled out: called as a function, the parameter's default is typer's
         # OptionInfo object, which is truthy.
-        status(ctx, tabular=False, json_=False)  # bare `factory` is "what is in flight", like `docker ps`
+        status(ctx, detailed=False, json_=False)  # bare `factory` is "what is in flight", like `docker ps`
 
 
 def _open(ctx):
@@ -494,7 +494,7 @@ def _stage_label(item, settings, cache):
 @app.command()
 def status(
     ctx: typer.Context,
-    tabular: bool = typer.Option(False, "--tabular", "-t", help="one line per request, as a table"),
+    detailed: bool = typer.Option(False, "--detailed", "-d", help="a block per request, with its request text"),
     json_: bool = typer.Option(False, "--json", help=JSON_HELP),
 ):
     """What is in flight, across every repo - the `docker ps` of the factory."""
@@ -508,7 +508,7 @@ def status(
         out.print('no work items. [bold]factory submit "<request>" --name <label>[/] in a repo to start one.')
         return
     rows = [_summary(i, settings, cache) for i in items]
-    if tabular:
+    if not detailed:
         return _table(items, rows)
     # Two lines per item, the first one aligned so ids and names stay a column you can
     # scan. Colour and markup go on after the padding, never inside it.
