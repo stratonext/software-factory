@@ -5,6 +5,7 @@ why they live beside the tests rather than in any one of them.
 """
 
 import json
+import os
 import subprocess
 
 import pytest
@@ -38,6 +39,19 @@ ASKS_HUMAN = FLAKY + """ || echo '{"verdict": "human", "notes": "which table?"}'
 def _id(capsys):
     """`factory submit` prints `id: 1  name: ...` to a human; the tests want the id."""
     return capsys.readouterr().out.split("id:")[1].split()[0]
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_git(monkeypatch):
+    """Tests run git; a git hook runs the tests. Neither may see the other's context.
+
+    `task verify` is what .githooks/pre-commit runs, so the suite can be a child of `git
+    commit` - which exports GIT_INDEX_FILE=.git/index (relative) and friends to its hooks.
+    A `git worktree add` that inherits them resolves `.git/index` inside the new worktree,
+    where `.git` is a file, and dies with "index file open failed: Not a directory".
+    """
+    for var in [v for v in os.environ if v.startswith("GIT_")]:
+        monkeypatch.delenv(var, raising=False)
 
 
 @pytest.fixture(autouse=True)

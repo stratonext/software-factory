@@ -1,0 +1,23 @@
+#!/bin/sh
+# Installed by `task setup` (git config core.hooksPath .githooks). Runs what CI runs,
+# minus the wheel build: a red commit here is a red pipeline there. Skip with `git commit -n`.
+set -e
+
+# Block obvious secrets in staged content. Override with SKIP_SECRET_SCAN=1 git commit ...
+if [ -z "$SKIP_SECRET_SCAN" ]; then
+	# Added lines only; a SECRET/PASSWORD/TOKEN/KEY assigned a real-looking literal.
+	# $VARS, os.environ[...] and <placeholder> values do not match.
+	hits="$(git diff --cached -U0 --diff-filter=ACMR | grep '^+' | grep -v '^+++' \
+		| grep -iE '(secret|password|api[_-]?key|client_secret|access_token|private_key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"'][A-Za-z0-9/+_-]{16,}["'"'"']' \
+		|| true)"
+	if [ -n "$hits" ]; then
+		echo "✋ Possible secret in staged changes:"
+		echo "$hits"
+		echo "Keep it in the environment instead. Intentional? SKIP_SECRET_SCAN=1 git commit ..."
+		exit 1
+	fi
+fi
+
+# ponytail: the whole suite, not the staged files - it is 10 seconds, and a per-file
+# selection would still have to run everything that imports them.
+task verify

@@ -79,11 +79,16 @@ are run.
 
 ## Releasing
 
-Bump `version` in `pyproject.toml` and add the entry to [`CHANGELOG.md`](CHANGELOG.md)
-first — the suite fails if they disagree.
+Releases are tag-driven: bump `version` in `pyproject.toml`, add the entry to
+[`CHANGELOG.md`](CHANGELOG.md) — the suite fails if they disagree — then push a tag.
 
 ```bash
-task build && task smoke
-git tag v0.0.1 && git push origin v0.0.1
-uv publish                                 # needs a PyPI token
+task verify && task build && task smoke
+git commit -am "release: v0.1.0" && git push origin main
+git tag v0.1.0 && git push origin v0.1.0
 ```
+
+The tag runs [`.github/workflows/cli-release.yml`](.github/workflows/cli-release.yml), which
+gates on CI, builds, publishes to PyPI and cuts the GitHub Release. Nothing is uploaded by
+hand. The whole thing — pre-releases, trusted publishing, what to do when it fails — is in
+[`docs/releasing.md`](docs/releasing.md).
