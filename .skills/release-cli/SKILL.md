@@ -39,11 +39,17 @@ Releases are cut from `main`.
 
 ## 3. Bump the version
 
-One place only — `pyproject.toml`. The workflow **checks the tag against it** and fails the
-release on a mismatch; the version is never derived from the tag.
+`pyproject.toml` says it, and `uv lock` copies it into `uv.lock` — the lock records the
+project's own version too, so a bump that stops at `pyproject.toml` leaves the tree dirty
+the next time anyone runs `uv`. The workflow **checks the tag against `pyproject.toml`** and
+fails the release on a mismatch; the version is never derived from the tag.
 
 ```toml
 version = "0.2.0"
+```
+
+```bash
+uv lock          # then commit uv.lock with the bump
 ```
 
 ## 4. Write the CHANGELOG entry

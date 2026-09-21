@@ -31,6 +31,9 @@ So the version has to be bumped in a commit, *before* the tag.
    version = "0.1.0"
    ```
 
+   Then `uv lock`, and commit `uv.lock` with it: the lock records the project's own version,
+   so a bump that stops at `pyproject.toml` leaves the tree dirty on the next `uv run`.
+
 2. **Add the changelog entry.** [`CHANGELOG.md`](../CHANGELOG.md) follows
    [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the heading must be
    `## [0.1.0] - YYYY-MM-DD`. `tests/test_docs.py` fails if the version in `pyproject.toml`

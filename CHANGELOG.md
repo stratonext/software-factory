@@ -19,3 +19,8 @@ still free to change.
 - A git worktree per request, on its own branch, so several run at once without touching
   the tree you are editing.
 - `sf --skill`, the skill that teaches an agent to operate the factory.
+
+## [0.0.1] - 2026-09-21
+
+First stable release. The same build as 0.0.1rc1 - see that entry for what it
+contains - published to PyPI rather than TestPyPI.
