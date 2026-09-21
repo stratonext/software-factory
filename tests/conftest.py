@@ -9,6 +9,7 @@ import os
 import subprocess
 
 import pytest
+import typer.rich_utils
 import yaml
 
 from software_factory import runners
@@ -56,8 +57,15 @@ def _no_ambient_git(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _human_output(monkeypatch):
-    """capsys is not a terminal, and piped output is JSON - these tests read the text."""
+    """capsys is not a terminal, and piped output is JSON - these tests read the text.
+
+    Plain text, too. typer forces colour on when GITHUB_ACTIONS is set, so on CI a usage
+    error is not the string it looks like: the option name is highlighted, `--name` arrives
+    as `\x1b[1;36m-\x1b[0m\x1b[1;36m-name\x1b[0m`, and `"--name" in err` is false there
+    and true everywhere else. The env var is read once, at import, so patch what it set.
+    """
     monkeypatch.setenv("SF_OUTPUT", "human")
+    monkeypatch.setattr(typer.rich_utils, "FORCE_TERMINAL", None)
 
 
 def build(tmp_path, **spec):
