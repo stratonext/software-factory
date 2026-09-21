@@ -1,4 +1,4 @@
-<img src="assets/factory.svg" alt="" width="192" height="192">
+<img src="https://raw.githubusercontent.com/stratonext/software-factory/main/assets/factory.svg" alt="" width="192" height="192">
 
 Maintained by [StratoNext](https://www.stratonext.ai).
 
@@ -18,7 +18,7 @@ The project is designed to run locally and reuse the coding agents you already h
 
 The goal is simple: **bring the basic ideas of a software factory to your local machine, with pipelines defined as code and coding agents as workers.**
 
-![Sample pipelines](assets/sample-ss.png)
+![Sample pipelines](https://raw.githubusercontent.com/stratonext/software-factory/main/assets/sample-ss.png)
 
 ## Install
 

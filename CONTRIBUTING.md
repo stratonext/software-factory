@@ -72,7 +72,7 @@ change to the engine can be worked by the engine.
 ## Documentation is tested
 
 [`tests/test_docs.py`](tests/test_docs.py) reads the markdown and checks it against the
-code: every CLI command appears in the README, every relative link resolves, the pipeline
+code: every CLI command appears in the README, the pipeline
 schema matches the loader, and the changelog has an entry for the version in
 `pyproject.toml`. Prose rots silently because nothing runs it — so the parts that can be run
 are run.

@@ -75,6 +75,8 @@ Start from [`docs/overview.md`](docs/overview.md) for the model and
 - **Comments explain why, not what.** The existing ones pin decisions and the bugs behind
   them; that is the bar.
 - **Leave the tree clean.** No scratch files, no commented-out code.
+- **`README.md` is the PyPI long description.** Images and links in it need absolute URLs -
+  PyPI renders it standalone, with no repository for a relative path to resolve against.
 
 ## Tests
 
@@ -83,12 +85,10 @@ Start from [`docs/overview.md`](docs/overview.md) for the model and
   is stubbed in every test that touches it. Keep it that way: a suite that can cost money
   is a suite nobody runs.
 - [`tests/test_docs.py`](tests/test_docs.py) checks the prose against the code: every CLI
-  command appears in `README.md`, every relative link in every markdown file resolves,
-  `docs/pipeline-schema.yaml` matches the loader's `STEP_KEYS`, and `CHANGELOG.md` has an
-  entry for the version in `pyproject.toml`. So:
+  command appears in `README.md`, `docs/pipeline-schema.yaml` matches the loader's
+  `STEP_KEYS`, and `CHANGELOG.md` has an entry for the version in `pyproject.toml`. So:
   - a new `sf` command means a README mention,
-  - a new step key means a schema entry,
-  - a markdown link must point at a file that exists.
+  - a new step key means a schema entry.
 - Non-trivial logic ships with a test. Trivial one-liners do not need one.
 
 ## Commits

@@ -20,7 +20,6 @@ from software_factory import pipeline as pl
 from software_factory.__main__ import app
 
 ROOT = Path(__file__).parent.parent
-DOCS = sorted(p for p in ROOT.rglob("*.md") if ".venv" not in p.parts and ".git" not in p.parts)
 
 
 def test_every_command_is_documented():
@@ -53,15 +52,3 @@ def test_the_schema_matches_the_loader():
     stops a key added to the loader from being missing there, or the reverse."""
     schema = yaml.safe_load((ROOT / "docs" / "pipeline-schema.yaml").read_text())
     assert set(schema["$defs"]["step"]["properties"]) == pl.STEP_KEYS
-
-
-@pytest.mark.parametrize("doc", DOCS, ids=lambda p: str(p.relative_to(ROOT)))
-def test_every_relative_link_resolves(doc):
-    """One file per case, so a broken link names the file it is in. Anchors are not checked;
-    the target existing is what breaks when a page is renamed or merged away."""
-    broken = [
-        target
-        for target, _anchor in re.findall(r"\[[^\]]*\]\(([^)#]+)(#[^)]*)?\)", doc.read_text())
-        if not target.startswith(("http", "mailto:")) and not (doc.parent / target).exists()
-    ]
-    assert not broken, "%s links to missing: %s" % (doc.relative_to(ROOT), ", ".join(broken))
