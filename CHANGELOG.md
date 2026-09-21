@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format is
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-09-21
+
+The same build as 0.0.2rc1 - see that entry for what it contains - published to
+PyPI rather than TestPyPI.
+
 ## [0.0.2rc1] - 2026-09-21
 
 ### Changed
