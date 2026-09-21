@@ -1,0 +1,42 @@
+# yaml-language-server: $schema=../../../docs/pipeline-schema.yaml#/$defs/judge_file
+#
+# Does this diff need a person? Four noul probabilities and an ordered route.
+# `$name` thresholds resolve against `typesafe.thresholds` in ~/.sf/config.yaml, so the
+# whole installation retunes from one place.
+state:
+  diff: "git diff"
+  stat: "git diff --stat"
+
+questions:
+  destructive:
+    type: noul
+    instructions: >-
+      `diff` does something a person should sign off on before it lands: deletes or rewrites
+      data, drops or alters a migration, changes authentication, authorisation or secret
+      handling, touches CI, release or deploy configuration, or removes an existing public
+      interface. Ordinary code, tests and docs are not this.
+  scope:
+    type: noul
+    instructions: >-
+      `diff` goes well beyond `request` - unrelated refactors, reformatting, dependency
+      changes or files the request never implied. Changes a careful engineer would make
+      while implementing `request` are in scope.
+  stubbed:
+    type: noul
+    instructions: >-
+      `diff` leaves the work unfinished behind a placeholder: a TODO in new code, a function
+      that returns a constant where logic belongs, a commented-out implementation, or a test
+      that asserts nothing.
+  implements:
+    type: noul
+    instructions: >-
+      `diff` actually implements what `request` asked for, as far as `diff` and `stat` show.
+
+# First match wins; the last rule names no question, so it is the default.
+route:
+  - { when: destructive, above: $destructive, verdict: human, notes: "risky change - review before it lands" }
+  - { when: scope,       above: 0.6,          verdict: human, notes: "diff goes beyond the request" }
+  - { when: implements,  below: $implements,  verdict: fail,  notes: "does not implement the request" }
+  - { when: stubbed,     above: $stubbed,     verdict: fail,  notes: "work left stubbed or TODO" }
+  - { when: implements,  confidence_below: 0.5, verdict: human, notes: "judgment too uncertain to act on" }
+  - { verdict: pass }
