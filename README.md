@@ -26,7 +26,6 @@ The goal is simple: **bring the basic ideas of a software factory to your local 
 
 ```bash
 uv tool install software-factory     # or: pipx install software-factory
-pip install software-factory         # or into a virtualenv you manage yourself
 ```
 
 Then create the installation — `~/.sf`, a starter `config.yaml` and the directories the

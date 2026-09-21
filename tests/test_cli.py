@@ -3,6 +3,7 @@
 import json
 import shutil
 import subprocess
+import sys
 import threading
 import time
 
@@ -819,3 +820,45 @@ def test_an_unreadable_config_is_an_error_message_not_a_traceback(installation, 
     (installation / "config.yaml").write_text("- just\n- a list\n")
     assert main(["config"]) == 1
     assert "mapping" in capsys.readouterr().err
+
+
+def test_destructive_commands_ask_before_they_act(installation, tmp_path, monkeypatch, capsys):
+    """delete, cancel and prune all go through the one y/N gate: No is the default."""
+    monkeypatch.chdir(a_repo(tmp_path / "myproject"))
+    for label in ("one", "two", "three"):
+        main(["submit", "--description", label, "--name", label])
+    capsys.readouterr()
+    backend = LocalBackend(installation / "state", installation / "worktrees")
+
+    tty = type("tty", (), {"isatty": lambda self: True})()  # a person is there to answer
+    monkeypatch.setattr(sys, "stdin", tty)
+    answers = []
+    monkeypatch.setattr("builtins.input", lambda prompt="": answers.pop(0))
+
+    answers[:] = [""]  # a bare Enter
+    assert main(["delete", "1"]) == 1
+    assert "aborted" in capsys.readouterr().err
+    assert [i["id"] for i in backend.all()] == ["1", "2", "3"], "No deleted nothing"
+
+    answers[:] = ["maybe"]  # anything that is not y/yes is No too
+    assert main(["cancel", "1"]) == 1
+    assert backend.load("1")["status"] == "queued"
+
+    answers[:] = ["y"]
+    assert main(["cancel", "1"]) == 0
+    assert backend.load("1")["status"] == "cancelled"
+
+    answers[:] = ["yes"]
+    assert main(["delete", "1"]) == 0
+    assert [i["id"] for i in backend.all()] == ["2", "3"]
+
+    # --yes never asks: an empty `answers` would raise if anything reached input().
+    assert main(["cancel", "2", "--yes"]) == 0
+    assert main(["delete", "2", "--yes"]) == 0
+    assert main(["prune", "--status", "queued", "--yes"]) == 0
+    assert backend.all() == [], "and prune took the last one"
+
+    monkeypatch.setattr(sys, "stdin", type("pipe", (), {"isatty": lambda self: False})())
+    main(["submit", "--description", "scripted", "--name", "scripted"])  # piped: nobody to ask
+    capsys.readouterr()
+    assert main(["delete", "4"]) == 0, "automation is not blocked by a prompt"

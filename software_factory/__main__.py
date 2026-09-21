@@ -33,7 +33,6 @@ STATUS_COLOUR = {
     "running": "cyan", "queued": "dim", "cancelled": "magenta",
 }
 VERDICT_COLOUR = {"pass": "green", "fail": "red", "human": "yellow"}
-PRUNE_CONFIRM = 5  # more than a handful at once, and an interactive prune asks first
 # One help string per idea, however many commands take it.
 JSON_HELP = "machine-readable output (already the default when stdout is not a terminal)"
 ID_HELP = "a request id, as `sf submit` printed it"
@@ -85,6 +84,19 @@ def _skip(message):
     """The same error, without the exit: `delete` and `cancel` take many ids, and one
     bad id must not hide the ids after it. The caller exits 1 once, at the end."""
     err.print("[red]sf:[/] %s" % message)
+
+
+def _confirm(question, yes):
+    """One y/N gate for everything destructive: `delete`, `cancel`, `prune`.
+
+    `--yes` says it was already meant, and a stdin that is not a terminal says nobody is
+    there to answer - a pipe, a script, a cron line. Anything but `y`/`yes`, a bare Enter
+    included, is No: the dangerous answer is never the one you fall into.
+    """
+    if yes or not sys.stdin.isatty():
+        return
+    if input("%s [y/N] " % question).strip().lower() not in ("y", "yes"):
+        fail("aborted")
 
 
 def _load(backend, item_id):
@@ -928,10 +940,12 @@ def delete(
     ctx: typer.Context,
     ids: List[str] = typer.Argument(..., help=ID_HELP),
     force: bool = typer.Option(False, "--force", help="also delete an item that is running"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="do not ask"),
     json_: bool = typer.Option(False, "--json", help=JSON_HELP),
 ):
     """Drop requests: the item, its artifacts and its worktree all go."""
     backend, _settings = _open(ctx)
+    _confirm("delete %d request(s), their artifacts and their worktrees?" % len(ids), yes)
     # _skip(), not fail(): one bad id must not hide the ids after it.
     deleted, bad = [], False
     for item_id in ids:
@@ -961,7 +975,7 @@ def prune(
     repo: Optional[str] = typer.Option(None, help="only requests for this repo (default: here)"),
     older_than: Optional[str] = typer.Option(None, "--older-than", help="only ones that ended more than this ago (7d, 12h, 30m)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="say what would go, delete nothing"),
-    yes: bool = typer.Option(False, "--yes", "-y", help="do not ask, however many there are"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="do not ask"),
     json_: bool = typer.Option(False, "--json", help="machine-readable"),
 ):
     """Clear finished requests in bulk: every `done` one, unless you name other statuses.
@@ -992,8 +1006,8 @@ def prune(
         else:
             out.print("[dim]nothing to prune[/]")
         return
-    if not dry_run and not yes and len(doomed) > PRUNE_CONFIRM and sys.stdout.isatty():
-        typer.confirm("delete %d requests, their worktrees and their branches?" % len(doomed), abort=True)
+    if doomed and not dry_run:
+        _confirm("delete %d request(s), their worktrees and their branches?" % len(doomed), yes)
 
     rows, freed = [], 0
     for item in doomed:
@@ -1100,6 +1114,7 @@ def _size(n):
 def cancel(
     ctx: typer.Context,
     ids: List[str] = typer.Argument(..., help=ID_HELP),
+    yes: bool = typer.Option(False, "--yes", "-y", help="do not ask"),
     json_: bool = typer.Option(False, "--json", help=JSON_HELP),
 ):
     """Stop requests now: flag each on disk, then kill whatever step is mid-flight.
@@ -1107,6 +1122,7 @@ def cancel(
     `sf run <id>` re-queues a cancelled item as it stands - cancel undoes nothing.
     """
     backend, _settings = _open(ctx)
+    _confirm("cancel %d request(s)?" % len(ids), yes)
     cancelled, bad = [], False
     for item_id in ids:
         try:

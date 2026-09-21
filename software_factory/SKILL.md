@@ -37,9 +37,9 @@ daemon serves every image. Requests outlive your shell: submit here, ask from an
 | `sf runners` | every runner a step can `uses:`, whether its binary is on PATH, and what it supports |
 | `sf run <id> --note "..."` | answer a parked request; resumes from `item.stage` with your note in context |
 | `sf run <id> --stage <stage> --note "..."` | reject: re-enter at an earlier stage |
-| `sf cancel <ids>` | stop them now; `sf run <id>` picks one back up |
-| `sf delete <ids>` | drop the items, their artifacts and their worktrees. `--force` if one is running |
-| `sf prune` | housekeeping: delete finished requests in bulk — every `done` one by default. `--status <s>` repeatable (`failed`, `cancelled`, `queued`, `needs_human`), `--repo`, `--older-than 7d`, `--dry-run` to see what would go, `--yes` to skip the confirmation. Never touches a `running` request, and takes each one's `sf/<id>` branch with it |
+| `sf cancel <ids>` | stop them now; `sf run <id>` picks one back up. Asks `y/N` first, `--yes` to skip |
+| `sf delete <ids>` | drop the items, their artifacts and their worktrees. `--force` if one is running. Asks `y/N` first, `--yes` to skip |
+| `sf prune` | housekeeping: delete finished requests in bulk — every `done` one by default. `--status <s>` repeatable (`failed`, `cancelled`, `queued`, `needs_human`), `--repo`, `--older-than 7d`, `--dry-run` to see what would go, `--yes` to skip the `y/N` confirmation. Never touches a `running` request, and takes each one's `sf/<id>` branch with it |
 | `sf doctor` | one line per check of this installation: git, the `claude` CLI and its token, `SF_HOME`, the pipelines. Exits non-zero if something essential is missing — run it when a command behaves oddly |
 
 ## The loop
