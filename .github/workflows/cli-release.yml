@@ -70,9 +70,11 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     # Trusted Publishing mints an OIDC token scoped to this project, so there is no API
-    # token to store or rotate. The environment selects which index: configure `pypi` and
-    # `testpypi` on the repo, each with a trusted publisher pointing at this workflow.
-    environment: ${{ needs.build.outputs.prerelease == 'true' && 'testpypi' || 'pypi' }}
+    # token to store or rotate. The environment selects which index: `pypi-cli` and
+    # `testpypi-cli` on the repo, each with a trusted publisher on the matching index whose
+    # environment name is this one. The names have to agree on both sides, or the upload
+    # fails with `invalid-publisher` after everything else has already passed.
+    environment: ${{ needs.build.outputs.prerelease == 'true' && 'testpypi-cli' || 'pypi-cli' }}
     permissions:
       id-token: write
     steps:

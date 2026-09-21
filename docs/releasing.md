@@ -102,7 +102,7 @@ uv tool install --index https://test.pypi.org/simple/ software-factory==0.1.0rc1
 | `github-release` | Attaches the sdist and wheel to a GitHub Release with generated notes. |
 
 Publishing uses Trusted Publishing, so there is **no API token to store or rotate**. The
-`publish` job picks the GitHub environment (`pypi` or `testpypi`) from whether the tag is a
+`publish` job picks the GitHub environment (`pypi-cli` or `testpypi-cli`) from whether the tag is a
 pre-release; each environment must have a trusted publisher on PyPI/TestPyPI pointing at this
 repository and `cli-release.yml`.
 
