@@ -28,7 +28,7 @@ daemon serves every image. Requests outlive your shell: submit here, ask from an
 
 | Command | What it does |
 |---|---|
-| `sf submit "<request>" --name <label>` | queue a request; prints its id. `--file <path>` (`-` for stdin) for a long request, `--pipeline <name>`, `--repo <path>`, `--run` to work it immediately |
+| `sf submit --description "<request>" --name <label>` | queue a request; prints its id. `--file <path>` (`-` for stdin) for a long request, `--pipeline <name>`, `--repo <path>`, `--run` to work it immediately |
 | `sf run` | work the queue, **blocking until it is done**. `--detach` leaves an engine working in the background instead, `--repo` limits to this repo, `<ids>` to only these, `--concurrency N` |
 | `sf` / `sf status` | every request across every repo — the `docker ps` of the factory: one line per request, a table you can `| grep`. `-d`/`--detailed` is the fuller block form, with each request's text |
 | any command | **you get JSON**: output is JSON whenever stdout is not a terminal, which it never is for you. `--json` says so explicitly; `SF_OUTPUT=human` gets the text form |
@@ -44,7 +44,7 @@ daemon serves every image. Requests outlive your shell: submit here, ask from an
 
 ## The loop
 
-1. `sf submit "<request>" --name <label>` from inside the repo → note the id.
+1. `sf submit --description "<request>" --name <label>` from inside the repo → note the id.
 2. `sf run` (or `sf run <id>`).
 3. Poll `sf` until the row is `done`, `failed` or `needs_human`.
 4. `sf replay <id>` to read what happened. The work is the diff on branch `sf/<id>`

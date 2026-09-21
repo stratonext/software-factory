@@ -6,7 +6,7 @@
 # that branch and opening a PR from it is the natural last stage. Needs the GitHub CLI
 # installed and authenticated (`gh auth login`) and a remote you can push to.
 #
-# `sf submit "..." --pipeline ship`
+# `sf submit --description "..." --pipeline ship`
 name: ship
 description: >-
   Implement the request, commit it, push the request's own branch and open a pull request

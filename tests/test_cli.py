@@ -100,7 +100,7 @@ def test_cost_is_optional_and_totalled_per_pipeline(tmp_path, capsys, monkeypatc
 def test_submit_defaults_to_the_current_repo_and_records_it(installation, tmp_path, monkeypatch, capsys):
     repo = a_repo(tmp_path / "myproject")
     monkeypatch.chdir(repo)
-    assert main(["submit", "add a flag", "--name", "add-flag"]) == 0
+    assert main(["submit", "--description", "add a flag", "--name", "add-flag"]) == 0
     item_id = _id(capsys)
 
     backend = LocalBackend(installation / "state", installation / "worktrees")
@@ -112,14 +112,25 @@ def test_submit_defaults_to_the_current_repo_and_records_it(installation, tmp_pa
 
 def test_submit_requires_a_name(installation, tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(a_repo(tmp_path / "myproject"))
-    assert main(["submit", "add a flag"]) == 2, "a usage error is an exit code, not a traceback"
+    assert main(["submit", "--description", "add a flag"]) == 2, "a usage error is an exit code, not a traceback"
     assert "--name" in capsys.readouterr().err
+
+
+def test_submit_takes_the_request_as_an_option_not_a_bare_word(installation, tmp_path, monkeypatch, capsys):
+    """`--description` or `--file`, never a loose argument - options are what a CLI reads."""
+    monkeypatch.chdir(a_repo(tmp_path / "myproject"))
+    assert main(["submit", "add a flag", "--name", "add-flag"]) == 2, "a bare request is a usage error"
+    capsys.readouterr()
+    assert main(["submit", "--name", "add-flag"]) == 1, "neither given"
+    assert "--description" in capsys.readouterr().err
+    assert main(["submit", "--name", "add-flag", "--description", "x", "--file", "-"]) == 1, "both given"
+    assert "--description" in capsys.readouterr().err
 
 
 def test_submit_run_queues_and_works_it_in_one_command(installation, tmp_path, monkeypatch, capsys):
     repo = a_repo(tmp_path / "myproject")  # its dev.yaml is a command step, so no agent runs
     monkeypatch.chdir(repo)
-    assert main(["submit", "a thing", "--name", "a-thing", "--run"]) == 0
+    assert main(["submit", "--description", "a thing", "--name", "a-thing", "--run"]) == 0
     out = capsys.readouterr().out
 
     backend = LocalBackend(installation / "state", installation / "worktrees")
@@ -130,9 +141,9 @@ def test_submit_run_queues_and_works_it_in_one_command(installation, tmp_path, m
 def test_submit_refuses_an_overlong_name(installation, tmp_path, monkeypatch, capsys):
     """A name is a label for one status column, not a second request."""
     monkeypatch.chdir(a_repo(tmp_path / "myproject"))
-    assert main(["submit", "a thing", "--name", "x" * 40]) == 0, "40 is allowed"
+    assert main(["submit", "--description", "a thing", "--name", "x" * 40]) == 0, "40 is allowed"
     capsys.readouterr()
-    assert main(["submit", "a thing", "--name", "x" * 41]) == 1
+    assert main(["submit", "--description", "a thing", "--name", "x" * 41]) == 1
     assert "41 characters" in capsys.readouterr().err
 
 
@@ -156,14 +167,14 @@ def test_submit_refuses_a_repo_with_no_commits(installation, tmp_path, monkeypat
     bare.mkdir()
     subprocess.run(["git", "-C", str(bare), "init", "-q"], check=True, capture_output=True)
     monkeypatch.chdir(bare)
-    assert main(["submit", "do a thing", "--name", "thing"]) == 1, "caught at submit, not halfway through a run"
+    assert main(["submit", "--description", "do a thing", "--name", "thing"]) == 1, "caught at submit, not halfway through a run"
     assert "at least one commit" in capsys.readouterr().err
 
 
 def test_status_lists_every_repo_in_flight(installation, tmp_path, monkeypatch, capsys):
     for name in ("alpha", "beta"):
         monkeypatch.chdir(a_repo(tmp_path / name))
-        main(["submit", "work on %s" % name, "--name", name])
+        main(["submit", "--description", "work on %s" % name, "--name", name])
     capsys.readouterr()
 
     main([])  # bare `factory`
@@ -176,7 +187,7 @@ def test_status_shows_the_stage_position_in_the_pipeline(installation, tmp_path,
     """`a 1/1` - which stage, and how far through the pipeline that is."""
     repo = a_repo(tmp_path / "myproject")  # one step, "a"
     monkeypatch.chdir(repo)
-    main(["submit", "a thing", "--name", "a-thing"])
+    main(["submit", "--description", "a thing", "--name", "a-thing"])
     capsys.readouterr()
 
     main([])
@@ -196,7 +207,7 @@ def test_status_shows_the_stage_position_in_the_pipeline(installation, tmp_path,
 def test_worktrees_are_centralised_by_repo(installation, tmp_path, monkeypatch, capsys):
     repo = a_repo(tmp_path / "myproject")
     monkeypatch.chdir(repo)
-    main(["submit", "a thing", "--name", "thing"])
+    main(["submit", "--description", "a thing", "--name", "thing"])
     item_id = _id(capsys)
 
     backend = LocalBackend(installation / "state", installation / "worktrees")
@@ -208,8 +219,8 @@ def test_worktrees_are_centralised_by_repo(installation, tmp_path, monkeypatch, 
 def test_delete_drops_a_request_but_refuses_a_running_one(installation, tmp_path, monkeypatch, capsys):
     repo = a_repo(tmp_path / "myproject")
     monkeypatch.chdir(repo)
-    main(["submit", "cancel me", "--name", "cancel-me"])
-    main(["submit", "leave me alone", "--name", "leave-me-alone"])
+    main(["submit", "--description", "cancel me", "--name", "cancel-me"])
+    main(["submit", "--description", "leave me alone", "--name", "leave-me-alone"])
     capsys.readouterr()
     backend = LocalBackend(installation / "state", installation / "worktrees")
 
@@ -243,7 +254,7 @@ def test_delete_drops_a_request_but_refuses_a_running_one(installation, tmp_path
     assert main(["delete", "404"]) == 1
     assert "no such request: 404" in capsys.readouterr().err
 
-    main(["submit", "next one", "--name", "next-one"])
+    main(["submit", "--description", "next one", "--name", "next-one"])
     assert _id(capsys) == "3", "a deleted id is never handed out again"
     assert subprocess.run(["git", "-C", str(repo), "rev-parse", "sf/1"],
                           capture_output=True, text=True).stdout == head, \
@@ -262,7 +273,7 @@ def test_run_can_be_scoped_to_one_repo_or_request(installation, tmp_path, monkey
     """A global queue is useless without a way to work one slice of it."""
     for name in ("alpha", "beta"):
         monkeypatch.chdir(a_repo(tmp_path / name))
-        main(["submit", "work on %s" % name, "--name", name])
+        main(["submit", "--description", "work on %s" % name, "--name", name])
     capsys.readouterr()
 
     backend = LocalBackend(installation / "state", installation / "worktrees")
@@ -285,7 +296,7 @@ def test_run_returns_before_the_work_is_finished(installation, tmp_path, monkeyp
         check=True, capture_output=True,
     )
     monkeypatch.chdir(repo)
-    main(["submit", "slow work", "--name", "slow-work"])
+    main(["submit", "--description", "slow work", "--name", "slow-work"])
     item_id = _id(capsys)
 
     started = time.monotonic()
@@ -305,7 +316,7 @@ def test_run_returns_before_the_work_is_finished(installation, tmp_path, monkeyp
 def test_run_waits_when_asked(installation, tmp_path, monkeypatch, capsys):
     repo = a_repo(tmp_path / "quick")
     monkeypatch.chdir(repo)
-    main(["submit", "quick work", "--name", "quick-work"])
+    main(["submit", "--description", "quick work", "--name", "quick-work"])
     item_id = _id(capsys)
 
     assert main(["run"]) == 0
@@ -320,7 +331,7 @@ def test_run_with_an_id_unparks_a_request_and_works_it(installation, tmp_path, m
         yaml.safe_dump({"name": "dev", "steps": {"a": sh(ASKS_HUMAN, next="done")}})
     )
     monkeypatch.chdir(repo)
-    main(["submit", "add a flag", "--name", "add-flag"])
+    main(["submit", "--description", "add a flag", "--name", "add-flag"])
     item_id = _id(capsys)
     backend = LocalBackend(installation / "state", installation / "worktrees")
 
@@ -441,7 +452,7 @@ def test_a_cancelled_request_is_resumable(tmp_path):
 def test_the_cli_surface_survives(installation, tmp_path, monkeypatch, capsys):
     """The two things the Typer rewrite can break that nothing else covers."""
     monkeypatch.chdir(a_repo(tmp_path / "myproject"))
-    main(["submit", "one thing", "--name", "one-thing"])
+    main(["submit", "--description", "one thing", "--name", "one-thing"])
     capsys.readouterr()
 
     assert main(["run", "--repo"]) == 0, "`--repo` with no value still means 'here'"
@@ -454,7 +465,7 @@ def test_the_cli_surface_survives(installation, tmp_path, monkeypatch, capsys):
 def test_status_keeps_one_line_per_item(installation, tmp_path, monkeypatch, capsys):
     """A reason longer than the terminal must not be folded: `factory status | grep` reads it."""
     monkeypatch.chdir(a_repo(tmp_path / "myproject"))
-    main(["submit", "one thing", "--name", "one-thing"])
+    main(["submit", "--description", "one thing", "--name", "one-thing"])
     backend = LocalBackend(installation / "state", installation / "worktrees")
     item = backend.load("1")
     item["status"] = "needs_human"
@@ -485,7 +496,7 @@ def test_status_shows_every_version_a_request_ran_under(installation, tmp_path, 
         {"name": "dev", "version": 1,
          "steps": {"a": sh("true", next="b"), "b": sh("true", next="done")}}
     ))
-    main(["submit", "one thing", "--name", "one-thing"])
+    main(["submit", "--description", "one thing", "--name", "one-thing"])
     backend = LocalBackend(installation / "state", installation / "worktrees")
 
     capsys.readouterr()
@@ -537,7 +548,7 @@ def test_a_fresh_install_has_no_pipelines_and_says_so(installation, tmp_path, mo
     repo = a_repo(tmp_path / "bare")
     shutil.rmtree(repo / ".sf" / "pipelines")  # none in the repo, and none in ~/.sf either
     monkeypatch.chdir(repo)
-    assert main(["submit", "a thing", "--name", "thing", "--pipeline", "quick"]) == 1
+    assert main(["submit", "--description", "a thing", "--name", "thing", "--pipeline", "quick"]) == 1
     err = capsys.readouterr().err
     assert "no pipelines anywhere yet" in err and ".sf/pipelines" in err, err
 
@@ -611,7 +622,7 @@ def test_a_promoted_setting_reaches_the_step_it_caps(installation, tmp_path, mon
     installation.mkdir(parents=True, exist_ok=True)
     (installation / "config.yaml").write_text("step_timeout: 1\n")
     monkeypatch.chdir(repo)
-    main(["submit", "sit there", "--name", "slow"])
+    main(["submit", "--description", "sit there", "--name", "slow"])
     main(["run", "1"])
     capsys.readouterr()
 
@@ -624,7 +635,7 @@ def test_the_name_cap_is_a_setting(installation, tmp_path, monkeypatch, capsys):
     installation.mkdir(parents=True)
     (installation / "config.yaml").write_text("name_max: 4\n")
     monkeypatch.chdir(a_repo(tmp_path / "myproject"))
-    assert main(["submit", "add a flag", "--name", "add-flag"]) == 1
+    assert main(["submit", "--description", "add a flag", "--name", "add-flag"]) == 1
     assert "keep it to 4 or fewer" in capsys.readouterr().err
 
 
@@ -633,8 +644,8 @@ def test_the_name_cap_is_a_setting(installation, tmp_path, monkeypatch, capsys):
 def test_prune_clears_done_requests_and_their_branches(installation, tmp_path, monkeypatch, capsys):
     repo = a_repo(tmp_path / "myproject")  # its dev.yaml is one command step, so it runs to done
     monkeypatch.chdir(repo)
-    main(["submit", "finished", "--name", "one", "--run"])
-    main(["submit", "not started", "--name", "two"])
+    main(["submit", "--description", "finished", "--name", "one", "--run"])
+    main(["submit", "--description", "not started", "--name", "two"])
     capsys.readouterr()
     backend = LocalBackend(installation / "state", installation / "worktrees")
     ws = Path(backend.load("1")["workspace"])
@@ -659,7 +670,7 @@ def test_prune_clears_done_requests_and_their_branches(installation, tmp_path, m
 
 def test_prune_never_deletes_a_running_request(installation, tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(a_repo(tmp_path / "myproject"))
-    main(["submit", "busy", "--name", "busy"])
+    main(["submit", "--description", "busy", "--name", "busy"])
     backend = LocalBackend(installation / "state", installation / "worktrees")
     backend.claim(backend.load("1"))
     capsys.readouterr()
@@ -674,7 +685,7 @@ def test_prune_never_deletes_a_running_request(installation, tmp_path, monkeypat
 def test_prune_dry_run_deletes_nothing(installation, tmp_path, monkeypatch, capsys):
     repo = a_repo(tmp_path / "myproject")
     monkeypatch.chdir(repo)
-    main(["submit", "finished", "--name", "one", "--run"])
+    main(["submit", "--description", "finished", "--name", "one", "--run"])
     capsys.readouterr()
     backend = LocalBackend(installation / "state", installation / "worktrees")
     ws = Path(backend.load("1")["workspace"])
@@ -703,15 +714,16 @@ def test_version_is_the_installed_distributions(capsys):
 def test_a_global_option_works_after_the_subcommand(installation, tmp_path, monkeypatch, capsys):
     """`factory status --backend X` is what everyone types first, and click binds it to the app."""
     monkeypatch.chdir(a_repo(tmp_path / "myproject"))
-    main(["submit", "one thing", "--name", "one-thing"])
+    main(["submit", "--description", "one thing", "--name", "one-thing"])
     capsys.readouterr()
 
     assert main(["status", "--backend", str(tmp_path / "elsewhere")]) == 0
     assert "no work items" in capsys.readouterr().out, "the option took effect where it was typed"
 
-    assert main(["submit", "--name", "dashes", "--", "--backend is a word here"]) == 0
+    assert main(["submit", "--name", "dashes", "--description", "--backend is a word here"]) == 0
     backend = LocalBackend(installation / "state", installation / "worktrees")
-    assert backend.load("2")["request"] == "--backend is a word here", "`--` still ends the options"
+    assert backend.load("2")["request"] == "--backend is a word here", \
+        "a request that starts with a global option's name is still text"
 
 
 
@@ -727,7 +739,7 @@ def test_cancel_takes_many_ids_and_delete_emits_one_array(installation, tmp_path
     """Both take a list, and both print one array - not a JSON object per id, which no jq reads."""
     monkeypatch.chdir(a_repo(tmp_path / "myproject"))
     for label in ("one", "two"):
-        main(["submit", label, "--name", label])
+        main(["submit", "--description", label, "--name", label])
     capsys.readouterr()
 
     assert main(["cancel", "1", "2", "99"]) == 1, "the bad id is reported, the good ones still stop"
@@ -749,7 +761,7 @@ def test_run_wait_exits_non_zero_when_nothing_reached_done(installation, tmp_pat
         yaml.safe_dump({"name": "dev", "steps": {"a": sh("exit 3", on={"pass": "done"})}})
     )
     monkeypatch.chdir(repo)
-    main(["submit", "will not pass", "--name", "nope"])
+    main(["submit", "--description", "will not pass", "--name", "nope"])
 
     assert main(["run"]) == 1, "it parked; nothing reached done"
     assert main(["run"]) == 0, "an empty queue is not a failure"
@@ -759,7 +771,7 @@ def test_run_wait_exits_non_zero_when_nothing_reached_done(installation, tmp_pat
 def test_replay_says_no_instead_of_quietly_doing_something_else(installation, tmp_path, monkeypatch, capsys):
     """--artifact without --step was ignored, and --step 0 fell through to the whole run."""
     monkeypatch.chdir(a_repo(tmp_path / "myproject"))
-    main(["submit", "one thing", "--name", "one-thing"])
+    main(["submit", "--description", "one thing", "--name", "one-thing"])
     main(["run"])
     capsys.readouterr()
 

@@ -42,6 +42,9 @@ CLAUDE_TOKEN = "CLAUDE_CODE_OAUTH_TOKEN"
 # The options that belong to the app rather than to a command, and how many values each
 # takes. `_hoist` uses this to accept them after the subcommand as well as before.
 GLOBAL = {"--backend": 1, "--worktrees": 1, "--pipelines": 1, "--skill": 0, "--version": 0}
+# Command options whose value is words a human typed - `_hoist` steps over it, so a
+# request or a note that starts with a dash is not read as one of GLOBAL.
+FREE_TEXT = {"--description", "--name", "--note"}
 
 app = typer.Typer(add_completion=False, help=__doc__, rich_markup_mode="rich")
 
@@ -189,8 +192,8 @@ def init(
 @app.command()
 def submit(
     ctx: typer.Context,
-    request: Optional[str] = typer.Argument(None, help="the request itself, in plain words (or --file)"),
     name: str = typer.Option(..., help="short label for this request, shown in listings (40 chars max)"),
+    description: Optional[str] = typer.Option(None, "--description", help="the request itself, in plain words (or --file)"),
     file: Optional[str] = typer.Option(None, "-f", "--file", help="read the request from a file ('-' for stdin)"),
     repo: Optional[str] = typer.Option(None, help="the git repo to work in (default: the current directory)"),
     pipeline: Optional[str] = typer.Option(None, help="the pipeline to run it through; 'auto' asks TypeSafe to pick one, which costs a triage call"),
@@ -202,8 +205,9 @@ def submit(
     """Queue a new request."""
     backend, settings = _open(ctx)
     # click has no mutually exclusive group; say which one is missing rather than a usage dump.
-    if (request is None) == (file is None):
-        fail("give the request as an argument or with --file, not both")
+    if (description is None) == (file is None):
+        fail("give the request with --description or with --file, not both")
+    request = description
     if len(name) > settings["name_max"]:
         # A label, not a description - `factory status` gives it one column.
         fail("--name is %d characters; keep it to %d or fewer" % (len(name), settings["name_max"]))
@@ -522,7 +526,7 @@ def status(
         emit_json([_summary(i, settings, cache) for i in items])
         return
     if not items:
-        out.print('no work items. [bold]factory submit "<request>" --name <label>[/] in a repo to start one.')
+        out.print('no work items. [bold]factory submit --description "<request>" --name <label>[/] in a repo to start one.')
         return
     rows = [_summary(i, settings, cache) for i in items]
     if not detailed:
@@ -1210,14 +1214,19 @@ def _hoist(args):
 
     click binds an option to the command it follows, so `factory status --backend /tmp/x`
     is "No such option" - and nobody types it the other way round first. Cheaper to move
-    them than to explain the rule in four help strings. `--` ends the rewriting, so a
-    request whose text happens to start with a dash still reaches `submit` intact.
+    them than to explain the rule in four help strings. `--` ends the rewriting, and the
+    value of a free-text option is skipped over, so `--description "--version of the API"`
+    reaches `submit` as text rather than being hoisted out of it.
     """
     front, rest, i = [], [], 0
     while i < len(args):
         if args[i] == "--":
             rest += args[i:]
             break
+        if args[i] in FREE_TEXT:  # its value is data, never a global option
+            rest += args[i:i + 2]
+            i += 2
+            continue
         takes = GLOBAL.get(args[i].partition("=")[0])
         if takes is None:
             rest.append(args[i])
