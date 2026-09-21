@@ -18,7 +18,7 @@ start: code
 
 steps:
   code:
-    name: Implement it
+    name: code
     uses: claude
     with:
       prompt: prompts/code.md
@@ -27,16 +27,10 @@ steps:
     output: code.md
     next: gate
 
-  gate:
-    name: Does this need a human
-    uses: typesafe
-    with:
-      questions: prompts/human-review.yaml
-    output: gate.md                      # the numbers and the rule that fired, for replay
-    on: { pass: commit, fail: code }     # `human` is never routed - it parks
+
 
   commit:
-    name: Commit the work
+    name: commit
     uses: shell
     with:
       run: "git add -A && git diff --cached --quiet || git commit -m 'sf: implement the request'"

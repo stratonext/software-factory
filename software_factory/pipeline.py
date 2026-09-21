@@ -25,7 +25,7 @@ class Pipeline:
         self.dir = self.path.parent
         self.name = data.get("name", self.path.stem)
         self.version = data.get("version", 1)
-        # Prose for whoever is choosing a pipeline - a person reading `factory config`,
+        # Prose for whoever is choosing a pipeline - a person reading `sf config`,
         # or an agent picking one for a request. Optional, and nothing routes on it.
         self.description = data.get("description") or ""
         self.max_passes = data.get("max_passes", 3)
@@ -232,6 +232,6 @@ def search_path(repo, global_pipelines):
 
 
 def repo_pipelines(repo):
-    """Where a repo keeps its own pipelines. One definition: `factory config` lists this
+    """Where a repo keeps its own pipelines. One definition: `sf config` lists this
     directory too, and it used to spell the path itself and go stale when it moved."""
     return Path(repo) / REPO_DIR / "pipelines"

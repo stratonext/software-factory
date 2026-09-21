@@ -18,15 +18,25 @@ start: code
 
 steps:
   code:
-    name: Implement it
+    name: code
     uses: claude
     with:
       prompt: prompts/code.md     # a path, relative to this file
-    output: code.md               # what it produced, for later steps and for `sf replay`
-    next: scan
+    output: code.md
+    # gate.md exists only on a rework pass; an input that is not there yet is skipped.
+    input: gate.md
+    next: gate
+
+  gate:
+    name: human-review-required
+    uses: typesafe
+    with:
+      questions: prompts/human-review.yaml
+    output: gate.md                      # the numbers and the rule that fired, for replay
+    on: { pass: scan, fail: code }     # `human` is never routed - it parks
 
   scan:
-    name: Any secret in the diff
+    name: contains-secrets
     uses: typesafe                # a judge: typed questions, routed by the answers
     with:
       questions: prompts/secrets.yaml   # the questions, the thresholds and the routing
@@ -36,7 +46,7 @@ steps:
     on: { pass: commit }
 
   commit:
-    name: Commit the work
+    name: commit
     uses: shell                   # an ordinary command, run in the request's worktree
     with:
       # `git diff --cached --quiet` exits 0 when nothing is staged, so an agent that

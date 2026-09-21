@@ -1,4 +1,4 @@
-"""The global `factory` command: submit, status, run, replay, delete, cancel, config."""
+"""The global `sf` command: submit, status, run, replay, delete, cancel, config."""
 
 import json
 import shutil
@@ -166,7 +166,7 @@ def test_status_lists_every_repo_in_flight(installation, tmp_path, monkeypatch, 
         main(["submit", "work on %s" % name, "--name", name])
     capsys.readouterr()
 
-    main([])  # bare `factory`
+    main([])  # bare `sf`
     out = capsys.readouterr().out
     assert "REPO" in out and "PIPELINE" in out and "STAGE" in out, "the table is the default"
     assert "alpha" in out and "beta" in out, "one installation, many repos"
@@ -452,7 +452,7 @@ def test_the_cli_surface_survives(installation, tmp_path, monkeypatch, capsys):
 
 
 def test_status_keeps_one_line_per_item(installation, tmp_path, monkeypatch, capsys):
-    """A reason longer than the terminal must not be folded: `factory status | grep` reads it."""
+    """A reason longer than the terminal must not be folded: `sf status | grep` reads it."""
     monkeypatch.chdir(a_repo(tmp_path / "myproject"))
     main(["submit", "one thing", "--name", "one-thing"])
     backend = LocalBackend(installation / "state", installation / "worktrees")
@@ -603,7 +603,7 @@ def test_an_integer_setting_written_as_text_is_still_an_integer(installation, ca
 
 def test_a_promoted_setting_reaches_the_step_it_caps(installation, tmp_path, monkeypatch, capsys):
     """The point of promoting step_timeout: it has to arrive at the subprocess that runs
-    the step, not just at `factory config`."""
+    the step, not just at `sf config`."""
     repo = a_repo(tmp_path / "slow")
     (repo / ".sf" / "pipelines" / "dev.yaml").write_text(
         yaml.safe_dump({"name": "dev", "steps": {"a": {"uses": "shell", "with": {"run": "sleep 30"}, "next": "done"}}})
@@ -701,7 +701,7 @@ def test_version_is_the_installed_distributions(capsys):
 
 
 def test_a_global_option_works_after_the_subcommand(installation, tmp_path, monkeypatch, capsys):
-    """`factory status --backend X` is what everyone types first, and click binds it to the app."""
+    """`sf status --backend X` is what everyone types first, and click binds it to the app."""
     monkeypatch.chdir(a_repo(tmp_path / "myproject"))
     main(["submit", "one thing", "--name", "one-thing"])
     capsys.readouterr()
@@ -743,7 +743,7 @@ def test_cancel_takes_many_ids_and_delete_emits_one_array(installation, tmp_path
 
 
 def test_run_wait_exits_non_zero_when_nothing_reached_done(installation, tmp_path, monkeypatch, capsys):
-    """`factory run` is the CI gate: a queue that ended parked or failed must not exit 0."""
+    """`sf run` is the CI gate: a queue that ended parked or failed must not exit 0."""
     repo = a_repo(tmp_path / "myproject")
     (repo / ".sf" / "pipelines" / "dev.yaml").write_text(
         yaml.safe_dump({"name": "dev", "steps": {"a": sh("exit 3", on={"pass": "done"})}})
@@ -796,7 +796,7 @@ def test_doctor_names_what_is_missing_and_exits_non_zero(installation, tmp_path,
 
 
 def test_an_unreadable_config_is_an_error_message_not_a_traceback(installation, capsys):
-    """config.yaml is hand-edited - `factory init` seeds it and says so - so a stray
+    """config.yaml is hand-edited - `sf init` seeds it and says so - so a stray
     indent is a user mistake, and a scanner traceback is the wrong way to report one."""
     installation.mkdir(parents=True)
     (installation / "config.yaml").write_text("pipeline: dev\n  bad indent: [\n")

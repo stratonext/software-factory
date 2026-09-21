@@ -36,7 +36,7 @@ VERDICT_COLOUR = {"pass": "green", "fail": "red", "human": "yellow"}
 PRUNE_CONFIRM = 5  # more than a handful at once, and an interactive prune asks first
 # One help string per idea, however many commands take it.
 JSON_HELP = "machine-readable output (already the default when stdout is not a terminal)"
-ID_HELP = "a request id, as `factory submit` printed it"
+ID_HELP = "a request id, as `sf submit` printed it"
 MISSING = "no such request: %s"
 CLAUDE_TOKEN = "CLAUDE_CODE_OAUTH_TOKEN"
 # The options that belong to the app rather than to a command, and how many values each
@@ -196,7 +196,7 @@ def submit(
     pipeline: Optional[str] = typer.Option(None, help="the pipeline to run it through; 'auto' asks TypeSafe to pick one, which costs a triage call"),
     effort: Optional[str] = typer.Option(None, help="effort for every agent stage that does not set its own (low|medium|high|xhigh|max), or 'auto' to ask TypeSafe in the same call"),
     force: bool = typer.Option(False, "--force", help="queue it even if triage says the request is too vague"),
-    run_now: bool = typer.Option(False, "--run", help="work this request now instead of waiting for `factory run`"),
+    run_now: bool = typer.Option(False, "--run", help="work this request now instead of waiting for `sf run`"),
     json_: bool = typer.Option(False, "--json", help=JSON_HELP),
 ):
     """Queue a new request."""
@@ -205,7 +205,7 @@ def submit(
     if (request is None) == (file is None):
         fail("give the request as an argument or with --file, not both")
     if len(name) > settings["name_max"]:
-        # A label, not a description - `factory status` gives it one column.
+        # A label, not a description - `sf status` gives it one column.
         fail("--name is %d characters; keep it to %d or fewer" % (len(name), settings["name_max"]))
     if file is not None:  # not truthiness: `--file ""` must error, not traceback
         try:
@@ -252,7 +252,7 @@ def submit(
             out.print(kv([("triage", "$%.4f" % read.get("cost_usd", 0)),
                           ("specific", "%.2f" % read["specific"] if "specific" in read else "")]))
     if run_now:
-        # ponytail: hand off to `run`, so --run prints exactly what `factory run <id>` prints.
+        # ponytail: hand off to `run`, so --run prints exactly what `sf run <id>` prints.
         # detach=False: --run means "work it now", in front of me. repo: submit's --repo is
         # where to work, run's is a filter - the id already says which.
         run(ctx, ids=[item["id"]], repo=None, concurrency=None, detach=False, note="",
@@ -335,7 +335,7 @@ def run(
             return
         for item in items:
             out.print(kv([("id", item["id"]), ("status", "started")], indent=""))
-        out.print("  [dim]factory status[/]  what is in flight")
+        out.print("  [dim]sf status[/]  what is in flight")
         out.print("  [dim]tail -f %s[/]" % escape(str(log)))
         return
     done = engine.run(
@@ -414,7 +414,7 @@ def _unpark(backend, ids, note, stage, settings):
     """Naming a parked request means "unpark it and work it". Returns a problem, or None.
 
     `--note` and `--stage` are how you answer the agent, so they need an id: applying a
-    note to the whole queue would be worse than failing. A bare `factory run` still
+    note to the whole queue would be worse than failing. A bare `sf run` still
     ignores parked items - nobody wants the unanswered questions re-run behind their back.
     """
     if (note or stage) and not ids:
@@ -522,7 +522,7 @@ def status(
         emit_json([_summary(i, settings, cache) for i in items])
         return
     if not items:
-        out.print('no work items. [bold]factory submit "<request>" --name <label>[/] in a repo to start one.')
+        out.print('no work items. [bold]sf submit "<request>" --name <label>[/] in a repo to start one.')
         return
     rows = [_summary(i, settings, cache) for i in items]
     if not detailed:
@@ -690,7 +690,7 @@ def runners_cmd(ctx: typer.Context, json_: bool = typer.Option(False, "--json", 
     step, minutes in. This is the cheap way to find that out first.
     """
     _backend, settings = _open(ctx)
-    # cwd as the repo: `factory doctor` inside a project should list that project's own
+    # cwd as the repo: `sf doctor` inside a project should list that project's own
     # .sf/runners/ too, the same ones its pipelines would resolve.
     dirs = runners.search_path(Path.cwd(), settings["runners"])
     rows = []
@@ -762,7 +762,7 @@ def show(
     out.print("\n  %s" % escape(item["request"]))
     for n in item["notes"]:
         out.print(kv([("note", "[%s] %s" % (n["stage"], _clip(" ".join(n["text"].split()), 150)))]))
-    out.print("\n  [dim]factory replay %s   the run, step by step[/]" % item["id"])
+    out.print("\n  [dim]sf replay %s   the run, step by step[/]" % item["id"])
 
 
 def _total_cost(history):
@@ -884,7 +884,7 @@ def replay(
             out.print("       [dim]%s[/]" % escape(notes[:150] + ("..." if len(notes) > 150 else "")))
         if h.get("artifacts"):
             out.print("       [dim]%s[/]" % escape(" - ".join(sorted(h["artifacts"]))))
-    out.print("\n  [dim]factory replay %s --step N   to open one up[/]" % item["id"])
+    out.print("\n  [dim]sf replay %s --step N   to open one up[/]" % item["id"])
 
 
 def _how(h):
@@ -962,8 +962,8 @@ def prune(
 ):
     """Clear finished requests in bulk: every `done` one, unless you name other statuses.
 
-    Each one goes the way `factory delete` sends it - item, artifacts and worktree - and
-    its `factory/<id>` branch goes too, which is the part a long-lived repo accumulates.
+    Each one goes the way `sf delete` sends it - item, artifacts and worktree - and
+    its `sf/<id>` branch goes too, which is the part a long-lived repo accumulates.
     """
     backend, _settings = _open(ctx)
     wanted = list(status) if status else ["done"]
@@ -1049,10 +1049,10 @@ def _ended_before(item, cutoff, named):
 
 
 def _drop_branch(item):
-    """Remove the `factory/<id>` branch `backend.delete` leaves behind. A problem, or None.
+    """Remove the `sf/<id>` branch `backend.delete` leaves behind. A problem, or None.
 
     Only a branch this request made: no recorded workspace means no worktree was ever
-    added for it, so a `factory/<id>` in that repo is somebody else's. Git itself refuses
+    added for it, so a `sf/<id>` in that repo is somebody else's. Git itself refuses
     to delete a branch that is still checked out, which is the other half of the safety -
     and a branch that will not go is reported, never fatal. The prune is the point.
     """
@@ -1100,7 +1100,7 @@ def cancel(
 ):
     """Stop requests now: flag each on disk, then kill whatever step is mid-flight.
 
-    `factory run <id>` re-queues a cancelled item as it stands - cancel undoes nothing.
+    `sf run <id>` re-queues a cancelled item as it stands - cancel undoes nothing.
     """
     backend, _settings = _open(ctx)
     cancelled, bad = [], False
@@ -1185,7 +1185,7 @@ def doctor(ctx: typer.Context, json_: bool = typer.Option(False, "--json", help=
 
     # Only when this installation would actually ask: a key nobody needs is not a problem.
     # A judged pipeline merely sitting in the directory is not essential either - it is
-    # opt-in per request, and `factory doctor` must not fail a perfectly good install.
+    # opt-in per request, and `sf doctor` must not fail a perfectly good install.
     if judged or settings.get("triage"):
         triage = bool(settings.get("triage"))
         key_env = settings["typesafe"]["api_key_env"]
@@ -1208,7 +1208,7 @@ def doctor(ctx: typer.Context, json_: bool = typer.Option(False, "--json", help=
 def _hoist(args):
     """Move the global options in front of the subcommand, wherever they were typed.
 
-    click binds an option to the command it follows, so `factory status --backend /tmp/x`
+    click binds an option to the command it follows, so `sf status --backend /tmp/x`
     is "No such option" - and nobody types it the other way round first. Cheaper to move
     them than to explain the rule in four help strings. `--` ends the rewriting, so a
     request whose text happens to start with a dash still reaches `submit` intact.
@@ -1232,7 +1232,7 @@ def _hoist(args):
 def main(argv=None):
     """The CLI as a function: returns an exit code instead of exiting."""
     args = sys.argv[1:] if argv is None else list(argv)
-    # `factory run --repo` with no value means "this repo" (README). Typer has no
+    # `sf run --repo` with no value means "this repo" (README). Typer has no
     # supported way to declare an option whose value is optional, so fill it in here.
     for i in range(len(args) - 1, -1, -1):
         if args[i] == "--repo" and (i + 1 == len(args) or args[i + 1].startswith("-")):

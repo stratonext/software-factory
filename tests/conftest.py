@@ -38,7 +38,7 @@ ASKS_HUMAN = FLAKY + """ || echo '{"verdict": "human", "notes": "which table?"}'
 
 
 def _id(capsys):
-    """`factory submit` prints `id: 1  name: ...` to a human; the tests want the id."""
+    """`sf submit` prints `id: 1  name: ...` to a human; the tests want the id."""
     return capsys.readouterr().out.split("id:")[1].split()[0]
 
 

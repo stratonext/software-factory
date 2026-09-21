@@ -68,7 +68,7 @@ def test_backend_ids_are_unpadded_and_stay_in_numeric_order(backend_impl):
 
 
 def test_backend_ids_are_unique_under_concurrent_creates(backend_impl):
-    """Two `factory submit` calls at once must not be handed the same id."""
+    """Two `sf submit` calls at once must not be handed the same id."""
     start = threading.Barrier(8)
     ids = []
 

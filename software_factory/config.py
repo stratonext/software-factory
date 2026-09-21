@@ -182,7 +182,7 @@ def load(**overrides):
     settings = defaults()
     path = config_path()
     if path.exists():
-        # This file is hand-edited - `factory init` seeds it and says so - and a stray
+        # This file is hand-edited - `sf init` seeds it and says so - and a stray
         # indent or an unreadable directory must be the CLI's own error, not a traceback
         # from the YAML scanner. One error type out, the way runners.load does it.
         try:

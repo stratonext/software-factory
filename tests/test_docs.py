@@ -1,6 +1,6 @@
 """The docs, checked against the code they describe.
 
-Every one of these pins a mistake that actually shipped. `factory agents` was a command no
+Every one of these pins a mistake that actually shipped. `sf agents` was a command no
 document mentioned; the changelog sat a version behind `pyproject.toml`; a flag deleted from
 the CLI went on being documented in four places, one of them executable. Prose rots silently
 because nothing runs it - so run the parts that can be run.

@@ -9,7 +9,7 @@ from . import pipeline as pl
 from . import steps
 from .backend import now
 
-# The default for a caller that passes nothing; `factory config` shows what is in effect.
+# The default for a caller that passes nothing; `sf config` shows what is in effect.
 STEP_TIMEOUT = 1800
 
 
@@ -79,7 +79,7 @@ def _walk(backend, pipe, item, step_timeout, agent_attempts, retry_wait, max_inp
         return None  # another engine got there first
     workspace = backend.workspace(item["id"], item.get("repo", ""))
     steps.ensure_scratch(workspace)
-    # Recorded so `factory cancel` can find the pid file without calling `workspace()`,
+    # Recorded so `sf cancel` can find the pid file without calling `workspace()`,
     # which would create a worktree and a branch as a side effect of signalling.
     item["workspace"] = str(workspace)
     # Re-checked for the same reason as the claim: `workspace()` is a real `git worktree
@@ -91,7 +91,7 @@ def _walk(backend, pipe, item, step_timeout, agent_attempts, retry_wait, max_inp
     while True:
         # ponytail: cooperative, one small read per step. A step that finishes in the
         # window between this check and the end-of-iteration save overwrites the flag
-        # and the item walks on; a second `factory cancel` catches it. Closing that
+        # and the item walks on; a second `sf cancel` catches it. Closing that
         # needs compare-and-set on save, which is a change to the Backend contract.
         if backend.load(item["id"])["status"] == "cancelled":
             return _stop(backend, item, "cancelled", "")
@@ -197,10 +197,10 @@ def _walk(backend, pipe, item, step_timeout, agent_attempts, retry_wait, max_inp
         item["stage"] = target
         if target == pl.DONE:
             # ponytail: a gated step routing to done finishes instead of parking - there
-            # is no next stage to wait at. Review a finished run with `factory replay`.
+            # is no next stage to wait at. Review a finished run with `sf replay`.
             return _stop(backend, item, "done", "")
         if step.get("review"):
-            # Routed first, then parked: `factory run <id>` picks up at the next stage, so
+            # Routed first, then parked: `sf run <id>` picks up at the next stage, so
             # approving costs nothing and rejecting is `run <id> --stage <earlier>`.
             item["history"][-1]["gated"] = True
             return _stop(backend, item, "needs_human", "review after %s" % stage)

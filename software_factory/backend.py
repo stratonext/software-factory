@@ -18,8 +18,8 @@ def now():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-# Every state an item can be in, in lifecycle order. The engine and `factory cancel`
-# set them; `factory prune` validates what it was asked to clear against them.
+# Every state an item can be in, in lifecycle order. The engine and `sf cancel`
+# set them; `sf prune` validates what it was asked to clear against them.
 STATUSES = ("queued", "running", "done", "failed", "needs_human", "cancelled")
 # One request, one branch. Defined once because `workspace` creates it and the CLI's
 # `delete` removes it, and the two drifting apart deletes the wrong branch.
@@ -234,13 +234,13 @@ class LocalBackend(Backend):
             if repo:
                 # So `git worktree list` stops advertising a checkout that is gone.
                 subprocess.run(["git", "-C", str(repo), "worktree", "prune"], capture_output=True)
-        # The factory/<id> branch stays: cancelling drops the checkout, not the commits.
-        # `factory prune` is what takes the branch too, once the work is finished with.
+        # The sf/<id> branch stays: cancelling drops the checkout, not the commits.
+        # `sf prune` is what takes the branch too, once the work is finished with.
         shutil.rmtree(self._dir(item_id), ignore_errors=True)
         self._path(item_id).unlink(missing_ok=True)
         self._claim_marker(item_id).unlink(missing_ok=True)
         # A tombstone, so create() never hands this id out again. all() globs *.json,
-        # so it stays invisible to `factory status` and a second delete is still a no-op.
+        # so it stays invisible to `sf status` and a second delete is still a no-op.
         self._path(item_id).with_suffix(".deleted").touch()
 
 

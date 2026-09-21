@@ -80,7 +80,7 @@ def test_local_backend_is_the_default_url_scheme(tmp_path):
 def test_worktree_survives_a_reused_branch_name(installation, tmp_path):
     """Request ids restart when an installation is re-created; the branch must not collide."""
     repo = a_repo(tmp_path / "myproject")
-    subprocess.run(["git", "-C", str(repo), "branch", "factory/1"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "branch", "sf/1"], check=True, capture_output=True)
 
     backend = LocalBackend(installation / "state", installation / "worktrees")
     backend.create("r", "t", "a", repo=str(repo))

@@ -16,14 +16,14 @@ from . import runners
 
 # A reply the engine cannot use is usually a blip - an empty response, an overloaded
 # API - so the same prompt is sent again before the whole request is failed. These are
-# the defaults for a caller that passes nothing; `factory config` shows what is in effect.
+# the defaults for a caller that passes nothing; `sf config` shows what is in effect.
 AGENT_ATTEMPTS = 3
 RETRY_WAIT = 2  # seconds, times the attempt number
 
 # Every step's declared input:/output: lives here, inside the workspace the agents
 # already work in. Self-ignoring, so the worktree diff stays the deliverable.
 SCRATCH = "_FACTORY"
-# The running step's pid, so `factory cancel` can reach a step already in flight.
+# The running step's pid, so `sf cancel` can reach a step already in flight.
 PID_FILE = "step.pid"
 MAX_INPUT = 20000
 
@@ -296,7 +296,7 @@ def _result(verdict, notes, cost_usd, artifacts, output="", session_id="", resum
 
 
 def _exec(args, cwd, timeout, env=None):
-    """Run one step to completion, leaving its pid where `factory cancel` can find it."""
+    """Run one step to completion, leaving its pid where `sf cancel` can find it."""
     # stdin=DEVNULL: the agent CLI otherwise waits 3s for piped input on every call.
     # start_new_session: the step gets its own process group, so one killpg takes down
     # `claude` (or `sh -c`) *and* its children - on cancel and on timeout alike.

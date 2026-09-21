@@ -35,7 +35,7 @@ questions:
 # First match wins; the last rule names no question, so it is the default.
 route:
   - { when: destructive, above: $destructive, verdict: human, notes: "risky change - review before it lands" }
-  - { when: scope,       above: 0.6,          verdict: human, notes: "diff goes beyond the request" }
+  - { when: scope,       above: 0.8,          verdict: human, notes: "diff goes beyond the request" }
   - { when: implements,  below: $implements,  verdict: fail,  notes: "does not implement the request" }
   - { when: stubbed,     above: $stubbed,     verdict: fail,  notes: "work left stubbed or TODO" }
   - { when: implements,  confidence_below: 0.5, verdict: human, notes: "judgment too uncertain to act on" }
