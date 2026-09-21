@@ -194,8 +194,7 @@ def load(where, name, runner_dirs=None, default_runner=None):
     # and "no pipeline 'dev'" on its own tells nobody what to do about it.
     known = sorted({f.stem for d in dirs if Path(d).is_dir() for f in Path(d).glob("*.yaml")})
     remedy = ("try --pipeline %s" % ", ".join(known)) if known else (
-        "no pipelines anywhere yet - write one in %s/pipelines, or copy one out of the\n"
-        "  examples/ directory in the software-factory repository" % REPO_DIR)
+        "no pipelines anywhere yet, write one in %s/pipelines" % REPO_DIR)
     raise FileNotFoundError(
         "no pipeline '%s' in %s\n  %s" % (name, ", ".join(str(d) for d in dirs), remedy)
     )
