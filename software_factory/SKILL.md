@@ -28,12 +28,13 @@ daemon serves every image. Requests outlive your shell: submit here, ask from an
 
 | Command | What it does |
 |---|---|
-| `sf submit --description "<request>" --name <label>` | queue a request; prints its id. `--file <path>` (`-` for stdin) for a long request, `--pipeline <name>`, `--repo <path>`, `--run` to work it immediately |
+| `sf submit --description "<request>" --name <label>` | queue a request; prints its id. `--file <path>` (`-` for stdin) for a long request, `--pipeline <name>` (`local:<name>` / `global:<name>` when the same name exists in both tiers), `--repo <path>`, `--run` to work it immediately |
 | `sf run` | work the queue, **blocking until it is done**. `--detach` leaves an engine working in the background instead, `--repo` limits to this repo, `<ids>` to only these, `--concurrency N` |
 | `sf` / `sf status` | every request across every repo — the `docker ps` of the factory: one line per request, a table you can `| grep`. `-d`/`--detailed` is the fuller block form, with each request's text. `-m`/`--monitor` keeps the table on screen and refreshes it once a second until Ctrl-C — a terminal only, so never yours: poll `sf status` instead |
 | any command | **you get JSON**: output is JSON whenever stdout is not a terminal, which it never is for you. `--json` says so explicitly; `SF_OUTPUT=human` gets the text form |
 | `sf show <id>` | the raw item JSON (pipe to `jq`) |
 | `sf replay <id>` | play the run back: every step, its route, cost, artifacts. `--step N` opens one up, `--artifact <name>` picks one out, `--json` is the flattened timeline |
+| `sf pipelines` | every pipeline the factory can see: the installation-wide ones, then this repo's own, with each one's version and description. Says which file a bare `--pipeline <name>` reaches when the name is in both tiers. `-t`/`--tabular` is one padded line each — name, file, flavor |
 | `sf runners` | every runner a step can `uses:`, whether its binary is on PATH, and what it supports |
 | `sf run <id> --note "..."` | answer a parked request; resumes from `item.stage` with your note in context |
 | `sf run <id> --stage <stage> --note "..."` | reject: re-enter at an earlier stage |
@@ -115,9 +116,11 @@ restate it, and must not tell the agent to end its reply with anything else.
 and that is the whole search path - nothing ships. A step says who performs it
 (`uses:`) and what to hand them (`with:`).
 
-Shipped: `dev` (plan, code, test, review, commit), `quick` (code, commit — no plan, no
-tests, no review) for requests small enough to state exactly (`--pipeline quick`), and
-`judged` (a `uses: typesafe` gate in front of the reviewer; needs `TYPESAFE_API_KEY`).
+`sf pipelines` is what is actually on disk in both tiers. When a name exists in both, a
+bare `--pipeline dev` is the repo's own; `--pipeline local:dev` and `--pipeline global:dev`
+name one tier each, and the qualifier is kept on the request, so `sf status` shows
+`local:dev` and the run resolves the same file. `local:` on a request with no repo is an
+error, never a quiet fall back to the global file.
 
 ```yaml
 name: dev

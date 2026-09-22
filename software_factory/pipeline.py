@@ -17,6 +17,9 @@ STEP_KEYS = {"uses", "with", "name", "env", "next", "on", "review", "input", "ou
 # What `claude --effort` accepts. A stage declares how hard its agent should think;
 # cheap stages (commit, a mechanical edit) have no business at the top of the range.
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
+# The two tiers `search_path` lays out, spellable in a name: `local:dev` is the repo's own
+# file, `global:dev` the installation's. A bare `dev` keeps meaning "local, then global".
+TIERS = ("local", "global")
 
 
 class Pipeline:
@@ -177,24 +180,58 @@ class Pipeline:
         return target, target != DONE and self.rank[target] <= self.rank[name]
 
 
+def split(name):
+    """`('local', 'dev')` for `local:dev`, `(None, 'dev')` for a bare one.
+
+    Only the two tier words qualify a name. Anything else before a colon is part of the
+    file name, because that is what it was before this existed.
+    """
+    tier, sep, bare = name.partition(":")
+    return (tier, bare) if sep and tier in TIERS else (None, name)
+
+
+def qualified(wanted, name):
+    """The name to record on a request: the pipeline's, under the tier the user asked for.
+
+    `local:dev` stays `local:dev`, so the next run resolves the same file rather than
+    whichever tier happens to answer first. A bare name stays bare - which is what every
+    item already on disk carries, and they go on resolving exactly as they did.
+    """
+    tier, _bare = split(wanted)
+    return "%s:%s" % (tier, name) if tier else name
+
+
 def load(where, name, runner_dirs=None, default_runner=None):
     """Load a pipeline by name. `where` is a directory or an ordered list of them.
 
     The search order is how a repo's own `.sf/pipelines/` takes precedence over the
-    installation-wide ones, and those over the shipped copies: first listed wins.
-    `runner_dirs` is the same question for the runners its steps name; left out, only the
-    packaged ones resolve.
+    installation-wide ones: first listed wins. A `local:`/`global:` qualifier narrows that
+    to one tier instead. `runner_dirs` is the same question for the runners its steps name;
+    left out, only the packaged ones resolve.
     """
     dirs = [where] if isinstance(where, (str, Path)) else list(where)
+    tier, bare = split(name)
+    if tier:
+        # `search_path` puts the installation-wide directory last and the repo's own (when
+        # there is a repo) in front of it - so the tiers are a slice, not a second lookup.
+        dirs = dirs[-1:] if tier == "global" else dirs[:-1]
+    if not dirs:
+        raise FileNotFoundError(
+            "no pipeline '%s': local: is the repo's own %s/pipelines, and this request has "
+            "no repo\n  drop the qualifier, or submit from inside the repo" % (name, REPO_DIR)
+        )
     for d in dirs:
-        path = Path(d) / ("%s.yaml" % name)
+        path = Path(d) / ("%s.yaml" % bare)
         if path.exists():
             return Pipeline(yaml.safe_load(path.read_text()), path, runner_dirs, default_runner)
     # The remedy belongs in the message: a fresh installation has no ~/.sf at all,
-    # and "no pipeline 'dev'" on its own tells nobody what to do about it.
+    # and "no pipeline 'dev'" on its own tells nobody what to do about it. With a
+    # qualifier it also names the one tier that was searched, which is the whole question.
     known = sorted({f.stem for d in dirs if Path(d).is_dir() for f in Path(d).glob("*.yaml")})
-    remedy = ("try --pipeline %s" % ", ".join(known)) if known else (
-        "no pipelines anywhere yet, write one in %s/pipelines" % REPO_DIR)
+    remedy = ("try --pipeline %s" % ", ".join(
+        "%s:%s" % (tier, k) if tier else k for k in known)) if known else (
+        "nothing in there yet - `sf pipelines` lists every one the factory can see"
+        if tier else "no pipelines anywhere yet, write one in %s/pipelines" % REPO_DIR)
     raise FileNotFoundError(
         "no pipeline '%s' in %s\n  %s" % (name, ", ".join(str(d) for d in dirs), remedy)
     )

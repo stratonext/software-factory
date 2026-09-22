@@ -1000,3 +1000,92 @@ def test_the_monitor_beats_while_it_refreshes(installation, tmp_path, monkeypatc
     assert LIVE_DOT in lit(0) and LIVE_DOT in lit(2), "lit on the even ticks"
     assert LIVE_DOT not in lit(1) and LIVE_DOT not in lit(3), "and dim on the odd ones"
     assert LIVE_DOT in _frame(backend, settings, 1).plain, "dim, not gone - it must not jump"
+
+
+def _global_pipeline(installation, name="dev", description="The installation-wide line.",
+                     step="theirs"):
+    """A pipeline in ~/.sf/pipelines, to sit under (or beside) a repo's own."""
+    where = installation / "pipelines"
+    where.mkdir(parents=True, exist_ok=True)
+    (where / ("%s.yaml" % name)).write_text(yaml.safe_dump(
+        {"name": name, "description": description, "steps": {step: sh("true", next="done")}}
+    ))
+    return where
+
+
+def test_a_qualified_name_says_which_of_two_dev_pipelines_was_meant(
+        installation, tmp_path, monkeypatch, capsys):
+    """The same name in both tiers is the normal case; `local:`/`global:` is how a request
+    stops being ambiguous, and the item keeps the qualifier so the run resolves the same
+    file it was submitted against."""
+    _global_pipeline(installation)
+    repo = a_repo(tmp_path / "myproject")  # its own dev.yaml, one step "a"
+    monkeypatch.chdir(repo)
+    backend = LocalBackend(installation / "state", installation / "worktrees")
+
+    for wanted, stage in (("global:dev", "theirs"), ("local:dev", "a"), ("dev", "a")):
+        main(["submit", "--description", "a thing", "--name", "x", "--pipeline", wanted])
+        item = backend.load(_id(capsys))
+        assert item["pipeline"] == wanted, "the qualifier the user gave, kept"
+        assert item["stage"] == stage, "which is the file it resolved"
+
+    capsys.readouterr()
+    main(["status"])
+    out = capsys.readouterr().out
+    assert "global:dev" in out and "local:dev" in out, "a status row says which file"
+
+    # And a qualifier that resolves nowhere names the one tier it searched.
+    assert main(["submit", "--description", "a", "--name", "x", "--pipeline", "local:nope"]) == 1
+    err = capsys.readouterr().err
+    assert "no pipeline 'local:nope'" in err and str(repo / ".sf" / "pipelines") in err
+    assert str(installation / "pipelines") not in err, "local: never falls back to global"
+
+
+def test_local_without_a_repo_is_a_message_and_not_a_traceback(
+        installation, tmp_path, monkeypatch, capsys):
+    """An item with no repo has no local tier at all. The engine has to say that and fail
+    the one item, the way it does for any other unreadable pipeline."""
+    _global_pipeline(installation)
+    backend = LocalBackend(installation / "state", installation / "worktrees")
+    backend.create("a thing", "local:dev", "a", repo="", name="x")
+
+    assert main(["run", "1"]) == 1
+    assert "no repo" in capsys.readouterr().out
+    assert backend.load("1")["status"] == "failed"
+
+
+def test_pipelines_lists_both_tiers_and_what_shadows_what(
+        installation, tmp_path, monkeypatch, capsys):
+    _global_pipeline(installation)
+    _global_pipeline(installation, name="quick", description="The short line.")
+    repo = a_repo(tmp_path / "myproject")  # its own dev.yaml, which shadows the global one
+    monkeypatch.chdir(repo)
+
+    main(["pipelines"])
+    out = capsys.readouterr().out
+    assert "global" in out and str(installation / "pipelines") in out
+    assert "local" in out and str(repo / ".sf" / "pipelines") in out
+    assert "The installation-wide line." in out, "the description when the YAML has one"
+    assert "dev v1" in out and "quick v1" in out
+    assert "shadowed by local:dev" in out and "shadows global:dev" in out
+    assert "shadowed by local:quick" not in out, "only a name that is in both tiers"
+
+    main(["pipelines", "--tabular"])
+    lines = [row for row in capsys.readouterr().out.splitlines() if row.strip()]
+    assert len(lines) == 3, lines
+    assert [row.split()[-1] for row in lines] == ["global", "global", "local"]
+    assert [row.split()[0] for row in lines] == ["dev", "quick", "dev"], "global first, then local"
+    assert str(repo / ".sf" / "pipelines" / "dev.yaml") in lines[-1], "and where it came from"
+
+    main(["pipelines", "--json"])
+    rows = json.loads(capsys.readouterr().out)
+    assert [(r["name"], r["flavor"], r["bare"]) for r in rows] == [
+        ("dev", "global", False), ("quick", "global", True), ("dev", "local", True)
+    ], "`bare` is which row a bare --pipeline name reaches"
+
+    # Outside a repo there is no local tier to head: it says so rather than printing an
+    # empty group.
+    monkeypatch.chdir(tmp_path)
+    main(["pipelines"])
+    out = capsys.readouterr().out
+    assert "not in a git repo" in out and str(repo / ".sf") not in out, "no empty heading"

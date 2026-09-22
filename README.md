@@ -140,6 +140,12 @@ A pipeline is a YAML file in the repo's own `.sf/pipelines/<name>.yaml`, or in
 `~/.sf/pipelines/` for every repo. The repo's own copy wins, so two repos can both have a
 `dev` pipeline and mean different processes.
 
+`sf pipelines` lists both tiers, and says which file a bare `--pipeline dev` would reach
+when the name exists in both. To say which one you mean, qualify it: `--pipeline local:dev`
+searches only the repo's own directory, `--pipeline global:dev` only `~/.sf/pipelines`. The
+qualifier is recorded on the request, so `sf status` shows `local:dev` and the run resolves
+the file that was submitted against.
+
 The Quickstart's `quick` is about as small as one gets. Here is the next step up — implement,
 test, and send the work back to the coder if the tests fail:
 
@@ -260,6 +266,7 @@ sf status                   # what is in flight, across every repo (--detailed f
 sf show 1                   # full state of one request
 sf replay 1                 # play a run back (--step, --json)
 sf config                   # the settings in effect, and where they would be changed
+sf pipelines                # every pipeline the factory can see (--tabular for one line each)
 sf runners                  # every runner a step can use, and whether it is installed
 sf cancel 1 2               # stop requests now; `sf run <id>` picks one back up
 sf delete 1 2               # drop requests: item, artifacts and worktree
