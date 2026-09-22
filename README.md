@@ -2,6 +2,8 @@
 
 Maintained by [StratoNext](https://www.stratonext.ai).
 
+[![Listed in Awesome Jev](https://awesomejev.vercel.app/badge.svg)](https://awesomejev.vercel.app)
+
 # Local Software Factory
 
 A software factory is a system that turns software requests into finished work through a repeatable, automated process. Instead of handling every request manually, you define a pipeline of stages that moves the work from request to completion, with human review when needed.
@@ -212,7 +214,7 @@ questions:
             criteria: ["exactly the request", "small extras", "large unrelated changes"] }
 route:                                     # first match wins; a rule with no `when` is default
   - { when: secret, above: $secret, verdict: human, notes: "possible hardcoded credential" }
-  - { when: scope,  above: 1.5,     verdict: fail,  notes: "goes well beyond the request" }
+  - { when: scope,  above: 0.8,     verdict: fail,  notes: "goes well beyond the request" }
   - { verdict: pass }
 ```
 

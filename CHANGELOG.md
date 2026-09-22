@@ -8,8 +8,7 @@ All notable changes to this project are documented here. The format is
 
 ## [0.0.2] - 2026-09-21
 
-The same build as 0.0.2rc1 - see that entry for what it contains - published to
-PyPI rather than TestPyPI.
+Promoted 0.0.2rc1 to 0.0.2
 
 ## [0.0.2rc1] - 2026-09-21
 
