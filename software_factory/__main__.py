@@ -1,11 +1,13 @@
 """sf - submit requests, run the factory, inspect what is in flight."""
 
+import contextlib
 import json
 import os
 import shutil
 import signal
 import subprocess
 import sys
+import termios
 import time
 from pathlib import Path
 from typing import Any, List, NoReturn, Optional
@@ -40,10 +42,13 @@ JSON_HELP = "machine-readable output (already the default when stdout is not a t
 ID_HELP = "a request id, as `sf submit` printed it"
 MISSING = "no such request: %s"
 CLAUDE_TOKEN = "CLAUDE_CODE_OAUTH_TOKEN"
-# `sf status --monitor`: how often it re-reads the backend, and how wide the stage bar is.
-# The bar is a fixed number of cells so the STAGE column stays a column.
+# How often `--monitor` re-reads the backend, and how wide the stage bar is.
+# The bar is a fixed number of cells so the STAGE column stays a column. Its two glyphs are
+# one terminal cell each, which is what lets the table go on padding with len().
 REFRESH = 1.0
 STAGE_CELLS = 8
+BAR_DONE, BAR_LEFT = "█", "░"
+LIVE_DOT = "●"  # the monitor's heartbeat: lit on the even ticks, dim on the odd ones
 # The options that belong to the app rather than to a command, and how many values each
 # takes. `_hoist` uses this to accept them after the subcommand as well as before.
 GLOBAL = {"--backend": 1, "--worktrees": 1, "--pipelines": 1, "--skill": 0, "--version": 0}
@@ -507,19 +512,24 @@ def _pipeline_of(item, settings, cache):
 
 
 def _bar(at, total):
-    """`[====----]` - the same rank and total _stage_label already has, drawn.
+    """`███░░░░░` - the same rank and total _stage_label already has, drawn.
 
-    Plain ASCII and a fixed STAGE_CELLS width, so the column stays aligned and the table
-    keeps its one line per request. Rounded up: any progress at all lights a cell, and
-    only a finished request fills the bar.
+    Blocks, so it reads as a bar and not as a picture of one; _painted() colours the done
+    run green and the rest dim. Plain text, though, and a fixed STAGE_CELLS width: the table
+    pads its cells with ljust before any markup goes on, so a colour tag living inside
+    this string would shift every column after STAGE by the length of the tag. Rounded up:
+    any progress at all lights a cell, and only a finished request fills the bar.
     """
     filled = -(-at * STAGE_CELLS // total) if total else 0
-    return "[%s%s] " % ("=" * filled, "-" * (STAGE_CELLS - filled))
+    return "%s%s " % (BAR_DONE * filled, BAR_LEFT * (STAGE_CELLS - filled))
 
 
 def _stage_label(item, settings, cache, bar=False):
-    """`code 2/5`, or `code [====----] 2/5` with bar - the stage, and where it sits in
-    its pipeline's declared order.
+    """`code ███░░░░░ 2/5`, or bare `code 2/5` without bar - the stage, and where it
+    sits in its pipeline's declared order.
+
+    Every human view draws the bar; only the JSON keeps the bare counter, because that
+    field is something a script reads.
 
     Falls back to the bare stage name when the pipeline cannot be read (repo moved,
     YAML broken) or no longer has the stage (`--stage` into a since-edited pipeline):
@@ -570,7 +580,7 @@ def status(
     if not items:
         out.print('no work items. [bold]sf submit --description "<request>" --name <label>[/] in a repo to start one.')
         return
-    rows = [_summary(i, settings, cache) for i in items]
+    rows = [_summary(i, settings, cache, bar=True) for i in items]
     if not detailed:
         return _table(items, rows)
     # Two lines per item, the first one aligned so ids and names stay a column you can
@@ -582,7 +592,8 @@ def status(
             _status_markup(r["status"], _clip(" ".join(r["reason"].split()), 80)
                        if r["status"] == "needs_human" else ""),
         ))
-        out.print(kv([("repo", r["repo"]), ("pipeline", r["pipeline"]), ("stage", r["stage"])]))
+        out.print(_painted(kv([("repo", r["repo"]), ("pipeline", r["pipeline"]),
+                               ("stage", r["stage"])])))
         out.print(kv([("passes", r["passes"]), ("cost", _cost(r["cost_usd"])),
                       ("request", _clip(r["request"], 60))]))
         out.print()
@@ -590,8 +601,25 @@ def status(
 
 def _table(items, rows):
     """Every request, one padded line each - the whole list, never paged or cropped."""
-    for line in _table_lines(items, rows):
-        out.print(line)
+    out.print(_painted("\n".join(_table_lines(items, rows))))
+
+
+def _painted(markup):
+    """Markup as a Text, with the stage bars coloured in.
+
+    The colour goes on the finished text rather than inside a cell: the table pads its
+    cells on their length, so a tag living in one would move every column after it. Both
+    glyphs are the bar's alone, so a regex over the whole thing paints exactly the bars.
+
+    no_wrap after the fact, because from_markup only grew the keyword after rich 13,
+    which is what we depend on - it is what soft_wrap does for a print, said for a
+    renderable: one line per request, neither folded nor cropped at the terminal width.
+    """
+    text = Text.from_markup(markup, overflow="ignore")
+    text.no_wrap = True
+    text.highlight_regex("%s+" % BAR_DONE, "green")
+    text.highlight_regex("%s+" % BAR_LEFT, "dim")
+    return text
 
 
 def _table_lines(items, rows):
@@ -600,8 +628,8 @@ def _table_lines(items, rows):
     Hand-padded, not a rich Table: a Table folds a long needs_human reason at the console
     width, and this view promises one line per request so `| grep` reads it. Colour goes
     on after the padding (STATUS is last, so its markup cannot disturb a column), and
-    out.print with soft_wrap neither wraps nor crops. Lines rather than prints, so
-    --monitor can hand the same table to Live instead.
+    _painted() neither wraps nor crops. Lines rather than prints, so --monitor can hand
+    the same table to Live instead.
     """
     head = ("REQUEST", "NAME", "REPO", "PIPELINE", "STAGE", "PASSES", "COST")
     keys = ("id", "name", "repo", "pipeline", "stage", "passes", "cost_usd")
@@ -620,35 +648,64 @@ def _monitor(backend, settings):
     """`sf status -m`: the table, redrawn in place once a second until Ctrl-C.
 
     Live rather than clearing the screen - it repaints the lines it already owns, so
-    whatever was in the terminal before the command survives above it.
+    whatever was in the terminal before the command survives above it. Which is also why
+    the echo goes off: Live repaints the region it believes it owns, so a keystroke the
+    terminal echoed into that region - an Enter above all, which scrolls everything up a
+    line - leaves a stale copy of the first row behind. Nothing here reads stdin, so
+    there is nothing to see.
+    """
+    with _quiet_keys():
+        try:
+            with Live(console=out, auto_refresh=False) as live:
+                tick = 0
+                while True:
+                    live.update(_frame(backend, settings, tick), refresh=True)
+                    tick += 1
+                    time.sleep(REFRESH)
+        except KeyboardInterrupt:
+            return  # Ctrl-C is how this command ends: exit 0, no traceback
+
+
+@contextlib.contextmanager
+def _quiet_keys():
+    """Terminal echo off for the block, and back on however it leaves - Ctrl-C included.
+
+    A stdin that is not a terminal has no echo to mute and raises here; that is fine, the
+    keystrokes it does not have cannot land on the screen either.
     """
     try:
-        with Live(console=out, auto_refresh=False) as live:
-            while True:
-                live.update(_frame(backend, settings), refresh=True)
-                time.sleep(REFRESH)
-    except KeyboardInterrupt:
-        return  # Ctrl-C is how this command ends: exit 0, no traceback
+        fd = sys.stdin.fileno()
+        before = termios.tcgetattr(fd)
+    except (ValueError, OSError, termios.error):
+        yield
+        return
+    muted = list(before)
+    muted[3] &= ~termios.ECHO  # lflag, the one that puts keystrokes on the screen
+    try:
+        termios.tcsetattr(fd, termios.TCSADRAIN, muted)
+        yield
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, before)
 
 
-def _frame(backend, settings):
-    """One tick of the monitor.
+def _frame(backend, settings, tick=0):
+    """One tick of the monitor: the table, over a heartbeat that says it is still ticking.
 
     Everything is read again, including a fresh pipeline cache: a request submitted or
     finished since the last tick has to appear or go, and a pipeline edited mid-flight
     must not go on being shown with the stages it had when the command started.
+
+    The dot pulses off `tick` rather than a `blink` style, which plenty of terminals
+    quietly drop - and a dot that pulses because the frame was rebuilt is the honest
+    signal: it stops moving exactly when the refresh does.
     """
     items = backend.all()
-    if not items:
-        return Text("no work items.")
     cache: dict[str, Any] = {}
     rows = [_summary(i, settings, cache, bar=True) for i in items]
-    # What soft_wrap does for a print, said for a renderable: one line per request,
-    # neither folded nor cropped at the terminal width. no_wrap after the fact, because
-    # from_markup only grew the keyword after rich 13, which is what we depend on.
-    frame = Text.from_markup("\n".join(_table_lines(items, rows)), overflow="ignore")
-    frame.no_wrap = True
-    return frame
+    table = _table_lines(items, rows) if items else ["no work items."]
+    beat = "[green]%s[/]" % LIVE_DOT if tick % 2 == 0 else "[dim]%s[/]" % LIVE_DOT
+    return _painted("\n".join(table + [
+        "%s [dim]live - every %gs - Ctrl-C to stop[/]" % (beat, REFRESH)]))
 
 
 def _summary(item, settings, cache=None, bar=False):

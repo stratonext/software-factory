@@ -185,24 +185,27 @@ def test_status_lists_every_repo_in_flight(installation, tmp_path, monkeypatch, 
 
 
 def test_status_shows_the_stage_position_in_the_pipeline(installation, tmp_path, monkeypatch, capsys):
-    """`a 1/1` - which stage, and how far through the pipeline that is."""
+    """`a ░░░░░░░░ 0/1` - which stage, how far through the pipeline, and that drawn."""
+    from software_factory.__main__ import _bar
+
     repo = a_repo(tmp_path / "myproject")  # one step, "a"
     monkeypatch.chdir(repo)
     main(["submit", "--description", "a thing", "--name", "a-thing"])
     capsys.readouterr()
 
     main([])
-    assert "a 0/1" in capsys.readouterr().out, "queued: it has not worked that stage yet"
+    out = capsys.readouterr().out
+    assert "a %s0/1" % _bar(0, 1) in out, "queued: it has not worked that stage yet"
 
     main(["run", "1"])
     capsys.readouterr()
     main([])
-    assert "done 1/1" in capsys.readouterr().out, "done is not a step, so it reads N/N"
+    assert "done %s1/1" % _bar(1, 1) in capsys.readouterr().out, "done is not a step, so N/N"
 
     (repo / ".sf" / "pipelines" / "dev.yaml").unlink()  # pipeline gone: still lists, bare stage
     main([])
     out = capsys.readouterr().out
-    assert "done" in out and "done 1/1" not in out
+    assert "done" in out and "1/1" not in out, "no rank to draw, so neither bar nor counter"
 
 
 def test_worktrees_are_centralised_by_repo(installation, tmp_path, monkeypatch, capsys):
@@ -939,22 +942,61 @@ def test_monitor_needs_a_terminal_and_a_table(installation, tmp_path, monkeypatc
 
 def test_monitor_draws_the_stage_as_a_bar(installation, tmp_path, monkeypatch, capsys):
     """One source of truth: the bar is the rank and total `_stage_label` already computed."""
-    from software_factory.__main__ import STAGE_CELLS, _bar, _frame
+    from rich.text import Text
 
-    assert _bar(2, 5) == "[====----] ", "2 of 5, rounded up onto 8 cells"
-    assert _bar(0, 5) == "[%s] " % ("-" * STAGE_CELLS), "queued: nothing behind it yet"
-    assert _bar(5, 5) == "[%s] " % ("=" * STAGE_CELLS), "only a finished request fills it"
+    from software_factory.__main__ import BAR_DONE, BAR_LEFT, STAGE_CELLS, _bar, _frame
+
+    assert Text(BAR_DONE).cell_len == Text(BAR_LEFT).cell_len == 1, \
+        "one terminal cell each, or the table's len() padding is a lie"
+    assert _bar(2, 5) == BAR_DONE * 4 + BAR_LEFT * 4 + " ", "2 of 5, rounded up onto 8 cells"
+    assert _bar(0, 5) == BAR_LEFT * STAGE_CELLS + " ", "queued: nothing behind it yet"
+    assert _bar(5, 5) == BAR_DONE * STAGE_CELLS + " ", "only a finished request fills it"
 
     repo = a_repo(tmp_path / "myproject")  # one step, "a"
     monkeypatch.chdir(repo)
+    main(["submit", "--description", "a thing", "--name", "a-thing"])
+    # A second repo, whose stage name is longer: the two STAGE cells are different widths.
+    other = a_repo(tmp_path / "other")
+    (other / ".sf" / "pipelines" / "dev.yaml").write_text(yaml.safe_dump(
+        {"name": "dev", "steps": {"implement": sh("true", next="done")}}
+    ))
+    monkeypatch.chdir(other)
+    main(["submit", "--description", "another thing", "--name", "another-thing"])
+    capsys.readouterr()
+    backend = LocalBackend(installation / "state", installation / "worktrees")
+    settings = config.load()
+
+    frame = _frame(backend, settings)
+    lines = frame.plain.splitlines()
+    assert "a %s0/1" % _bar(0, 1) in frame.plain, "the bar sits with the counter it is drawn from"
+    assert len(lines) == 4, "a header, one line per request, and the heartbeat"
+    # The colour goes on the finished text, so no markup ever reaches the padding: the
+    # STATUS column starts at the same offset on every line, whatever the stage is called.
+    assert len({len(line) - len("queued") for line in lines[1:3]}) == 1
+    assert lines[0].index("STATUS") == lines[1].index("queued") == lines[2].index("queued")
+    assert BAR_DONE not in frame.plain, "queued: no cell is lit"
+
+    main(["run", "1"])
+    frame = _frame(backend, settings)
+    assert "done %s1/1" % _bar(1, 1) in frame.plain, "re-read every tick"
+    green = [frame.plain[s.start:s.end] for s in frame.spans if str(s.style) == "green"]
+    assert BAR_DONE * STAGE_CELLS in green, "the filled run is green, not the whole bar"
+
+
+def test_the_monitor_beats_while_it_refreshes(installation, tmp_path, monkeypatch, capsys):
+    """The dot pulses off the tick, so it stops moving exactly when the refresh does."""
+    from software_factory.__main__ import LIVE_DOT, _frame
+
+    monkeypatch.chdir(a_repo(tmp_path / "myproject"))
     main(["submit", "--description", "a thing", "--name", "a-thing"])
     capsys.readouterr()
     backend = LocalBackend(installation / "state", installation / "worktrees")
     settings = config.load()
 
-    frame = _frame(backend, settings).plain
-    assert "a [--------] 0/1" in frame, "the bar sits with the counter it is drawn from"
-    assert len(frame.splitlines()) == 2, "a header and one line per request, as ever"
+    def lit(tick):
+        frame = _frame(backend, settings, tick)
+        return [frame.plain[s.start:s.end] for s in frame.spans if str(s.style) == "green"]
 
-    main(["run", "1"])
-    assert "done [========] 1/1" in _frame(backend, settings).plain, "re-read every tick"
+    assert LIVE_DOT in lit(0) and LIVE_DOT in lit(2), "lit on the even ticks"
+    assert LIVE_DOT not in lit(1) and LIVE_DOT not in lit(3), "and dim on the odd ones"
+    assert LIVE_DOT in _frame(backend, settings, 1).plain, "dim, not gone - it must not jump"

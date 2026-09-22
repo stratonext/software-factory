@@ -14,9 +14,16 @@ All notable changes to this project are documented here. The format is
   kept too — dropping those is what `sf delete` is for. Refuses a `running` request, and
   asks `y/N` first like `prune` does (`--yes` to skip).
 - `sf status --monitor` / `-m`: keeps the table on screen and redraws it in place once a
-  second until Ctrl-C, re-reading the backend and the pipelines every tick. In this mode
-  the stage column also draws its position as a bar — `code [====----] 2/5`. It needs a
+  second until Ctrl-C, re-reading the backend and the pipelines every tick, under a
+  heartbeat line that pulses off the tick — so it stops moving exactly when the refresh
+  does. Terminal echo is off for the duration: an echoed Enter scrolled the terminal out
+  from under the redraw and left a stale copy of the first row behind. It needs a
   terminal, so it refuses `--json` and a stdout that is not one.
+
+### Changed
+- The STAGE column now draws its position as a bar in every human view — `code ███░░░░░ 2/5`,
+  the finished run in green and the rest dim — the plain table, `--detailed` and `--monitor`
+  alike. `--json` keeps the bare `code 2/5`, since that field is something a script reads.
 
 ## [0.0.2] - 2026-09-21
 
