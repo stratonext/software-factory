@@ -7,6 +7,12 @@ All notable changes to this project are documented here. The format is
 ## [Unreleased]
 
 ### Added
+- `sf reset <ids>`: takes a request back to the start of its pipeline so it can be worked
+  again from scratch — stage back to the pipeline's declared `start`, passes back to zero,
+  notes emptied, status `queued`. `history` is kept, so `sf replay` and the accumulated
+  cost still read the whole life of the request; the worktree and the `sf/<id>` branch are
+  kept too — dropping those is what `sf delete` is for. Refuses a `running` request, and
+  asks `y/N` first like `prune` does (`--yes` to skip).
 - `sf status --monitor` / `-m`: keeps the table on screen and redraws it in place once a
   second until Ctrl-C, re-reading the backend and the pipelines every tick. In this mode
   the stage column also draws its position as a bar — `code [====----] 2/5`. It needs a

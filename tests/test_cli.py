@@ -450,6 +450,64 @@ def test_a_cancelled_request_is_resumable(tmp_path):
     assert backend.load("1")["status"] == "done", "`run <id>` picks a cancelled request back up"
 
 
+def test_reset_takes_a_finished_request_back_to_the_start(tmp_path):
+    """A done request comes back as new work - minus its notes, keeping its history."""
+    backend, pipelines = build(
+        tmp_path,
+        start="a",
+        steps={"a": sh("true", next="b"), "b": sh("true", next="done")},
+    )
+    backend.create("r", "t", "a")
+    assert drain(backend, pipelines)[0]["status"] == "done"
+    ran = backend.load("1")
+    ran["notes"] = [{"stage": "human", "text": "also do the other thing"}]
+    ran["passes"] = 3
+    backend.save(ran)
+
+    cli = ["--backend", str(tmp_path / "state"), "--pipelines", pipelines]
+    assert main(cli + ["reset", "1", "--yes"]) == 0
+
+    item = backend.load("1")
+    assert item["stage"] == "a", "back at the pipeline's declared start"
+    assert item["passes"] == 0
+    assert item["notes"] == [], "a reset request carries no leftover instructions"
+    assert item["status"] == "queued"
+    assert item["reason"].startswith("reset ")
+    assert "ended" not in item, "it is live again"
+    assert item["history"] == ran["history"] and item["history"], "`sf replay` still reads it"
+
+
+def test_reset_refuses_a_running_request(tmp_path):
+    backend, pipelines = build(tmp_path, steps={"a": sh("sleep 30", next="done")})
+    backend.create("r", "t", "a")
+    walker = threading.Thread(target=engine.run, args=(backend, pipelines), daemon=True)
+    walker.start()
+    _await_step(tmp_path, "1")
+
+    cli = ["--backend", str(tmp_path / "state"), "--worktrees", str(tmp_path / "worktrees"),
+           "--pipelines", pipelines]
+    assert main(cli + ["reset", "1", "--yes"]) == 1
+    assert backend.load("1")["status"] == "running", "not reset under the engine's feet"
+
+    assert main(cli + ["cancel", "1", "--yes"]) == 0
+    walker.join(timeout=10)
+
+
+def test_reset_asks_before_dropping_the_notes(tmp_path, monkeypatch):
+    """`--yes` skips the y/N gate; without it, anything but y is No."""
+    backend, pipelines = build(tmp_path, steps={"a": sh("true", next="done")})
+    backend.create("r", "t", "a")
+    cli = ["--backend", str(tmp_path / "state"), "--pipelines", pipelines]
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "")
+    assert main(cli + ["reset", "1"]) == 1, "a bare Enter is No"
+    assert backend.load("1")["passes"] == 1, "nothing was touched"
+
+    assert main(cli + ["reset", "1", "--yes"]) == 0, "--yes never reaches the prompt"
+    assert backend.load("1")["passes"] == 0
+
+
 def test_the_cli_surface_survives(installation, tmp_path, monkeypatch, capsys):
     """The two things the Typer rewrite can break that nothing else covers."""
     monkeypatch.chdir(a_repo(tmp_path / "myproject"))

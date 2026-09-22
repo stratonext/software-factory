@@ -1224,6 +1224,64 @@ def cancel(
 
 
 @app.command()
+def reset(
+    ctx: typer.Context,
+    ids: List[str] = typer.Argument(..., help=ID_HELP),
+    yes: bool = typer.Option(False, "--yes", "-y", help="do not ask"),
+    json_: bool = typer.Option(False, "--json", help=JSON_HELP),
+):
+    """Take requests back to the start of their pipeline, to be worked from scratch.
+
+    Stage goes back to the pipeline's declared `start`, passes back to zero, and the notes
+    are emptied - every `--note` a human gave and every rework note the line wrote is
+    dropped. That is the point: a reset request carries no leftover instructions into its
+    first stage. It is queued again, so `sf run` picks it up.
+
+    What it deliberately keeps: `history`, so `sf replay <id>` and the accumulated cost
+    still read back the whole life of the request - a reset is a restart, not an amnesia.
+    The worktree and the `sf/<id>` branch stay exactly as they are too; dropping those is
+    what `sf delete` is for.
+    """
+    backend, settings = _open(ctx)
+    _confirm("reset %d request(s) to the start, dropping their notes?" % len(ids), yes)
+    # _skip(), not fail(): one bad id must not hide the ids after it.
+    cache: dict[str, Any] = {}  # one pipeline read per pipeline, for this reset only
+    done, bad = [], False
+    for item_id in ids:
+        try:
+            item = backend.load(item_id)
+        except FileNotFoundError:
+            _skip(MISSING % escape(item_id))
+            bad = True
+            continue
+        if item["status"] == "running":
+            # A running step writes the item back when it finishes, at the stage it was
+            # working - which would undo the reset under the engine's feet.
+            _skip("%s is running; `sf cancel %s` first" % (escape(item_id), escape(item_id)))
+            bad = True
+            continue
+        pipe = _pipeline_of(item, settings, cache)
+        if pipe is None:
+            # A moved repo or a broken YAML is a message, not a traceback: the start
+            # stage is only knowable from the pipeline itself.
+            _skip("%s: pipeline '%s' cannot be read - has the repo moved?"
+                  % (escape(item_id), escape(item["pipeline"])))
+            bad = True
+            continue
+        item["stage"] = pipe.start
+        item["passes"] = 0
+        item["notes"] = []
+        item["status"] = "queued"
+        item["reason"] = "reset %s" % now()
+        item.pop("ended", None)  # live again: an end time would outlive what ended
+        backend.save(item)
+        done.append({"id": item["id"], "status": "queued", "stage": item["stage"]})
+    _report(done, json_)
+    if bad:
+        raise typer.Exit(1)
+
+
+@app.command()
 def doctor(ctx: typer.Context, json_: bool = typer.Option(False, "--json", help=JSON_HELP)):
     """Check this installation: the tools, the token, the paths, the pipelines.
 

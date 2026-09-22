@@ -38,6 +38,7 @@ daemon serves every image. Requests outlive your shell: submit here, ask from an
 | `sf run <id> --note "..."` | answer a parked request; resumes from `item.stage` with your note in context |
 | `sf run <id> --stage <stage> --note "..."` | reject: re-enter at an earlier stage |
 | `sf cancel <ids>` | stop them now; `sf run <id>` picks one back up. Asks `y/N` first, `--yes` to skip |
+| `sf reset <ids>` | take them back to the start of their pipeline and work them from scratch: stage back to the pipeline's `start`, passes back to zero, notes emptied, queued again. `history` stays, so `sf replay` still reads the whole life of the request, and so do the worktree and the `sf/<id>` branch. A `done` request resets; a `running` one is refused. Asks `y/N` first, `--yes` to skip |
 | `sf delete <ids>` | drop the items, their artifacts and their worktrees. `--force` if one is running. Asks `y/N` first, `--yes` to skip |
 | `sf prune` | housekeeping: delete finished requests in bulk — every `done` one by default. `--status <s>` repeatable (`failed`, `cancelled`, `queued`, `needs_human`), `--repo`, `--older-than 7d`, `--dry-run` to see what would go, `--yes` to skip the `y/N` confirmation. Never touches a `running` request, and takes each one's `sf/<id>` branch with it |
 | `sf doctor` | one line per check of this installation: git, the `claude` CLI and its token, `SF_HOME`, the pipelines. Exits non-zero if something essential is missing — run it when a command behaves oddly |

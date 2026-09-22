@@ -263,6 +263,7 @@ sf config                   # the settings in effect, and where they would be ch
 sf runners                  # every runner a step can use, and whether it is installed
 sf cancel 1 2               # stop requests now; `sf run <id>` picks one back up
 sf delete 1 2               # drop requests: item, artifacts and worktree
+sf reset 1 2                # back to the start of the pipeline, notes dropped, history kept
 sf prune                    # clear finished requests in bulk (--status, --older-than)
 sf doctor                   # is this installation able to work anything?
 sf --version                # what is installed
