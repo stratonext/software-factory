@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format is
 
 ## [Unreleased]
 
+### Added
+- `sf status --monitor` / `-m`: keeps the table on screen and redraws it in place once a
+  second until Ctrl-C, re-reading the backend and the pipelines every tick. In this mode
+  the stage column also draws its position as a bar — `code [====----] 2/5`. It needs a
+  terminal, so it refuses `--json` and a stdout that is not one.
+
 ## [0.0.2] - 2026-09-21
 
 Promoted 0.0.2rc1 to 0.0.2

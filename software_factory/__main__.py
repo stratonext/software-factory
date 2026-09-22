@@ -12,7 +12,9 @@ from typing import Any, List, NoReturn, Optional
 
 import typer
 from rich.console import Console
+from rich.live import Live
 from rich.markup import escape
+from rich.text import Text
 
 from . import __version__
 from . import runners
@@ -38,6 +40,10 @@ JSON_HELP = "machine-readable output (already the default when stdout is not a t
 ID_HELP = "a request id, as `sf submit` printed it"
 MISSING = "no such request: %s"
 CLAUDE_TOKEN = "CLAUDE_CODE_OAUTH_TOKEN"
+# `sf status --monitor`: how often it re-reads the backend, and how wide the stage bar is.
+# The bar is a fixed number of cells so the STAGE column stays a column.
+REFRESH = 1.0
+STAGE_CELLS = 8
 # The options that belong to the app rather than to a command, and how many values each
 # takes. `_hoist` uses this to accept them after the subcommand as well as before.
 GLOBAL = {"--backend": 1, "--worktrees": 1, "--pipelines": 1, "--skill": 0, "--version": 0}
@@ -146,7 +152,8 @@ def root(
     if ctx.invoked_subcommand is None:
         # json_ spelled out: called as a function, the parameter's default is typer's
         # OptionInfo object, which is truthy.
-        status(ctx, detailed=False, json_=False)  # bare `factory` is "what is in flight", like `docker ps`
+        # bare `sf` is "what is in flight", like `docker ps`
+        status(ctx, detailed=False, monitor=False, json_=False)
 
 
 def _open(ctx):
@@ -499,8 +506,20 @@ def _pipeline_of(item, settings, cache):
     return cache[key]
 
 
-def _stage_label(item, settings, cache):
-    """`code 2/5` - the stage, and where it sits in its pipeline's declared order.
+def _bar(at, total):
+    """`[====----]` - the same rank and total _stage_label already has, drawn.
+
+    Plain ASCII and a fixed STAGE_CELLS width, so the column stays aligned and the table
+    keeps its one line per request. Rounded up: any progress at all lights a cell, and
+    only a finished request fills the bar.
+    """
+    filled = -(-at * STAGE_CELLS // total) if total else 0
+    return "[%s%s] " % ("=" * filled, "-" * (STAGE_CELLS - filled))
+
+
+def _stage_label(item, settings, cache, bar=False):
+    """`code 2/5`, or `code [====----] 2/5` with bar - the stage, and where it sits in
+    its pipeline's declared order.
 
     Falls back to the bare stage name when the pipeline cannot be read (repo moved,
     YAML broken) or no longer has the stage (`--stage` into a since-edited pipeline):
@@ -521,17 +540,28 @@ def _stage_label(item, settings, cache):
     # The step's own `name:` when it declared one - it is the label a person wrote for
     # this station, and the key is only ever the thing that routes.
     shown = pipe.label(item["stage"]) if item["stage"] in pipe.steps else item["stage"]
-    return "%s %d/%d" % (shown, at, total)
+    return "%s %s%d/%d" % (shown, _bar(at, total) if bar else "", at, total)
 
 
 @app.command()
 def status(
     ctx: typer.Context,
     detailed: bool = typer.Option(False, "--detailed", "-d", help="a block per request, with its request text"),
+    monitor: bool = typer.Option(False, "--monitor", "-m", help="keep the table on screen, "
+                                 "refreshed once a second, until Ctrl-C"),
     json_: bool = typer.Option(False, "--json", help=JSON_HELP),
 ):
     """What is in flight, across every repo - the `docker ps` of the factory."""
     backend, settings = _open(ctx)
+    if monitor:
+        # Both of these are "there is nothing here to refresh", said before anything prints.
+        if json_:
+            fail("--monitor and --json are different things: one redraws a table, the other "
+                 "prints one document. Pick one.")
+        if not sys.stdout.isatty():
+            fail("--monitor needs a terminal: nothing redraws in a pipe or a file. "
+                 "Drop it, or poll `sf status --json`.")
+        return _monitor(backend, settings)
     items = backend.all()
     cache: dict[str, Any] = {}  # one pipeline read per pipeline, for this listing only
     if as_json(json_):
@@ -559,33 +589,76 @@ def status(
 
 
 def _table(items, rows):
-    """Every request, one padded line each - the whole list, never paged or cropped.
+    """Every request, one padded line each - the whole list, never paged or cropped."""
+    for line in _table_lines(items, rows):
+        out.print(line)
+
+
+def _table_lines(items, rows):
+    """The table as markup, a line at a time - the header, then one line per request.
 
     Hand-padded, not a rich Table: a Table folds a long needs_human reason at the console
     width, and this view promises one line per request so `| grep` reads it. Colour goes
     on after the padding (STATUS is last, so its markup cannot disturb a column), and
-    out.print with soft_wrap neither wraps nor crops.
+    out.print with soft_wrap neither wraps nor crops. Lines rather than prints, so
+    --monitor can hand the same table to Live instead.
     """
     head = ("REQUEST", "NAME", "REPO", "PIPELINE", "STAGE", "PASSES", "COST")
     keys = ("id", "name", "repo", "pipeline", "stage", "passes", "cost_usd")
     cells = [tuple(_cost(r[k]) if k == "cost_usd" else str(r[k]) for k in keys) for r in rows]
     widths = [max(len(c[n]) for c in [head] + cells) for n in range(len(head))]
-    out.print("[bold]%s  STATUS[/]" % "  ".join(v.ljust(w) for v, w in zip(head, widths)))
-    for item, row in zip(items, cells):
-        out.print("%s  %s" % (
+    return ["[bold]%s  STATUS[/]" % "  ".join(v.ljust(w) for v, w in zip(head, widths))] + [
+        "%s  %s" % (
             "  ".join(escape(v.ljust(w)) for v, w in zip(row, widths)),
             _status_markup(item["status"], item.get("reason", "") if item["status"] == "needs_human" else ""),
-        ))
+        )
+        for item, row in zip(items, cells)
+    ]
 
 
-def _summary(item, settings, cache=None):
+def _monitor(backend, settings):
+    """`sf status -m`: the table, redrawn in place once a second until Ctrl-C.
+
+    Live rather than clearing the screen - it repaints the lines it already owns, so
+    whatever was in the terminal before the command survives above it.
+    """
+    try:
+        with Live(console=out, auto_refresh=False) as live:
+            while True:
+                live.update(_frame(backend, settings), refresh=True)
+                time.sleep(REFRESH)
+    except KeyboardInterrupt:
+        return  # Ctrl-C is how this command ends: exit 0, no traceback
+
+
+def _frame(backend, settings):
+    """One tick of the monitor.
+
+    Everything is read again, including a fresh pipeline cache: a request submitted or
+    finished since the last tick has to appear or go, and a pipeline edited mid-flight
+    must not go on being shown with the stages it had when the command started.
+    """
+    items = backend.all()
+    if not items:
+        return Text("no work items.")
+    cache: dict[str, Any] = {}
+    rows = [_summary(i, settings, cache, bar=True) for i in items]
+    # What soft_wrap does for a print, said for a renderable: one line per request,
+    # neither folded nor cropped at the terminal width. no_wrap after the fact, because
+    # from_markup only grew the keyword after rich 13, which is what we depend on.
+    frame = Text.from_markup("\n".join(_table_lines(items, rows)), overflow="ignore")
+    frame.no_wrap = True
+    return frame
+
+
+def _summary(item, settings, cache=None, bar=False):
     """One work item as flat fields - what both the JSON and the human form print."""
     return {
         "id": item["id"],
         "name": item.get("name", "") or "-",
         "repo": Path(item.get("repo", "")).name or "-",
         "pipeline": _pipeline_cell(item),
-        "stage": _stage_label(item, settings, {} if cache is None else cache),
+        "stage": _stage_label(item, settings, {} if cache is None else cache, bar),
         "passes": item["passes"],
         "cost_usd": _total_cost(item["history"]),
         "status": item["status"],

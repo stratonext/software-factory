@@ -862,3 +862,41 @@ def test_destructive_commands_ask_before_they_act(installation, tmp_path, monkey
     main(["submit", "--description", "scripted", "--name", "scripted"])  # piped: nobody to ask
     capsys.readouterr()
     assert main(["delete", "4"]) == 0, "automation is not blocked by a prompt"
+
+
+def test_monitor_needs_a_terminal_and_a_table(installation, tmp_path, monkeypatch, capsys):
+    """`-m` redraws a table in place: there is nothing to redraw in a pipe, or in JSON."""
+    monkeypatch.chdir(a_repo(tmp_path / "myproject"))
+    main(["submit", "--description", "one thing", "--name", "one-thing"])
+    capsys.readouterr()
+
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True, raising=False)
+    assert main(["status", "--monitor", "--json"]) == 1
+    assert "--monitor" in capsys.readouterr().err, "a message, not a traceback"
+
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False, raising=False)
+    assert main(["status", "-m"]) == 1
+    assert "terminal" in capsys.readouterr().err
+
+
+def test_monitor_draws_the_stage_as_a_bar(installation, tmp_path, monkeypatch, capsys):
+    """One source of truth: the bar is the rank and total `_stage_label` already computed."""
+    from software_factory.__main__ import STAGE_CELLS, _bar, _frame
+
+    assert _bar(2, 5) == "[====----] ", "2 of 5, rounded up onto 8 cells"
+    assert _bar(0, 5) == "[%s] " % ("-" * STAGE_CELLS), "queued: nothing behind it yet"
+    assert _bar(5, 5) == "[%s] " % ("=" * STAGE_CELLS), "only a finished request fills it"
+
+    repo = a_repo(tmp_path / "myproject")  # one step, "a"
+    monkeypatch.chdir(repo)
+    main(["submit", "--description", "a thing", "--name", "a-thing"])
+    capsys.readouterr()
+    backend = LocalBackend(installation / "state", installation / "worktrees")
+    settings = config.load()
+
+    frame = _frame(backend, settings).plain
+    assert "a [--------] 0/1" in frame, "the bar sits with the counter it is drawn from"
+    assert len(frame.splitlines()) == 2, "a header and one line per request, as ever"
+
+    main(["run", "1"])
+    assert "done [========] 1/1" in _frame(backend, settings).plain, "re-read every tick"

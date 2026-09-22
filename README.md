@@ -95,6 +95,7 @@ And from anywhere, to see what is happening:
 
 ```bash
 sf status          # everything in flight, across every repo
+sf status -m       # the same table, refreshed once a second until Ctrl-C
 sf show 1          # the full state of one request
 sf replay 1        # play the run back: every step, its route, its artifacts
 ```
@@ -255,7 +256,7 @@ trusted input, and it must never be able to reach the model as an instruction.
 sf init                     # create ~/.sf, its config.yaml and its directories
 sf submit --description "..." --name x    # queue a request against this repo (--file, --pipeline, --run)
 sf run                      # work the queue (--repo, <id>..., --detach, --note, --stage)
-sf status                   # what is in flight, across every repo (--detailed for the block form)
+sf status                   # what is in flight, across every repo (--detailed for the block form, --monitor to watch it)
 sf show 1                   # full state of one request
 sf replay 1                 # play a run back (--step, --json)
 sf config                   # the settings in effect, and where they would be changed
