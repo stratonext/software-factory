@@ -28,8 +28,10 @@ daemon serves every image. Requests outlive your shell: submit here, ask from an
 
 | Command | What it does |
 |---|---|
-| `sf submit --description "<request>" --name <label>` | queue a request; prints its id. `--file <path>` (`-` for stdin) for a long request, `--pipeline <name>`, `--repo <path>`, `--run` to work it immediately |
+| `sf submit --description "<request>" --name <label>` | queue a request; prints its id. `--file <path>` (`-` for stdin) for a long request, `--pipeline <name>`, `--repo <path>`, `--run` to work it immediately, `--paused` to queue it without letting `sf run`/`sf daemon` pick it up yet |
 | `sf run` | work the queue, **blocking until it is done**. `--detach` leaves an engine working in the background instead, `--repo` limits to this repo, `<ids>` to only these, `--concurrency N` |
+| `sf pause <ids>` | pull queued requests back out of the queue without cancelling them; `sf run <id>` resumes one, same as unparking `needs_human` |
+| `sf daemon start` | leave an engine running that keeps working the queue as requests land, polling every `--interval` seconds (default 5) under the same `--concurrency` quota `sf run` uses. `sf daemon status` / `sf daemon stop` |
 | `sf` / `sf status` | every request across every repo — the `docker ps` of the factory: one line per request, a table you can `| grep`. `-d`/`--detailed` is the fuller block form, with each request's text. `-m`/`--monitor` keeps the table on screen and refreshes it once a second until Ctrl-C — a terminal only, so never yours: poll `sf status` instead |
 | any command | **you get JSON**: output is JSON whenever stdout is not a terminal, which it never is for you. `--json` says so explicitly; `SF_OUTPUT=human` gets the text form |
 | `sf show <id>` | the raw item JSON (pipe to `jq`) |

@@ -139,6 +139,20 @@ def test_submit_run_queues_and_works_it_in_one_command(installation, tmp_path, m
     assert out.count("id: 1") == 2, "the id line, then the run result line"
 
 
+def test_submit_paused_stays_out_of_the_queue(installation, tmp_path, monkeypatch, capsys):
+    repo = a_repo(tmp_path / "myproject")
+    monkeypatch.chdir(repo)
+    assert main(["submit", "--description", "a thing", "--name", "a-thing", "--paused"]) == 0
+    item_id = _id(capsys)
+
+    backend = LocalBackend(installation / "state", installation / "worktrees")
+    assert backend.load(item_id)["status"] == "paused"
+    assert engine.queued(backend) == [], "a paused request is not queued"
+
+    assert main(["submit", "--description", "x", "--name", "x", "--paused", "--run"]) == 1
+    assert "contradict" in capsys.readouterr().err
+
+
 def test_submit_refuses_an_overlong_name(installation, tmp_path, monkeypatch, capsys):
     """A name is a label for one status column, not a second request."""
     monkeypatch.chdir(a_repo(tmp_path / "myproject"))
@@ -317,6 +331,53 @@ def test_run_returns_before_the_work_is_finished(installation, tmp_path, monkeyp
     assert (installation / "state" / "run.log").exists()
 
 
+def test_daemon_picks_up_a_request_and_can_be_stopped(installation, tmp_path, monkeypatch, capsys):
+    """The daemon is a poll loop: nobody types `sf run` for it to pick a request up."""
+    repo = a_repo(tmp_path / "watched")
+    monkeypatch.chdir(repo)
+
+    started = time.monotonic()
+    assert main(["daemon", "start", "--interval", "1"]) == 0
+    assert time.monotonic() - started < 1.5, "daemon start blocked on the poll loop"
+    capsys.readouterr()
+
+    deadline = time.monotonic() + 10
+    status = {"running": False}
+    while not status["running"]:
+        assert time.monotonic() < deadline, "the daemon never wrote its pidfile"
+        main(["daemon", "status", "--json"])
+        status = json.loads(capsys.readouterr().out)
+        if not status["running"]:
+            time.sleep(0.1)
+    assert status["pid"]
+    assert (installation / "state" / "daemon.log").exists()
+
+    main(["submit", "--description", "watched work", "--name", "watched"])
+    item_id = _id(capsys)
+
+    backend = LocalBackend(installation / "state", installation / "worktrees")
+    deadline = time.monotonic() + 60
+    while backend.load(item_id)["status"] in ("queued", "running"):
+        assert time.monotonic() < deadline, "the daemon never picked it up"
+        time.sleep(0.2)
+    assert backend.load(item_id)["status"] == "done"
+
+    assert main(["daemon", "start", "--interval", "1"]) == 1, "already running - refused"
+    capsys.readouterr()
+
+    assert main(["daemon", "stop"]) == 0
+    capsys.readouterr()
+    deadline = time.monotonic() + 10
+    while True:
+        main(["daemon", "status", "--json"])
+        if not json.loads(capsys.readouterr().out)["running"]:
+            break
+        assert time.monotonic() < deadline, "daemon never stopped"
+        time.sleep(0.2)
+
+    assert main(["daemon", "stop"]) == 1, "already stopped"
+
+
 def test_run_waits_when_asked(installation, tmp_path, monkeypatch, capsys):
     repo = a_repo(tmp_path / "quick")
     monkeypatch.chdir(repo)
@@ -451,6 +512,25 @@ def test_a_cancelled_request_is_resumable(tmp_path):
     main(["--backend", str(tmp_path / "state"), "--pipelines", pipelines,
           "--worktrees", str(tmp_path / "worktrees"), "run", "1"])
     assert backend.load("1")["status"] == "done", "`run <id>` picks a cancelled request back up"
+
+
+def test_pause_pulls_a_queued_request_out_and_run_resumes_it(tmp_path):
+    backend, pipelines = build(tmp_path, steps={"a": sh("true", next="done")})
+    backend.create("r", "t", "a")
+    assert main(["--backend", str(tmp_path / "state"), "pause", "1"]) == 0
+    assert backend.load("1")["status"] == "paused"
+    assert engine.queued(backend) == [], "a paused request is not queued"
+
+    main(["--backend", str(tmp_path / "state"), "--pipelines", pipelines, "run", "1"])
+    assert backend.load("1")["status"] == "done", "`run <id>` resumes a paused request"
+
+
+def test_pause_refuses_a_non_queued_request(tmp_path):
+    backend, pipelines = build(tmp_path, steps={"a": sh("true", next="done")})
+    backend.create("r", "t", "a")
+    assert drain(backend, pipelines)[0]["status"] == "done"
+    assert main(["--backend", str(tmp_path / "state"), "pause", "1"]) == 1
+    assert backend.load("1")["status"] == "done"
 
 
 def test_reset_takes_a_finished_request_back_to_the_start(tmp_path):

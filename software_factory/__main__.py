@@ -34,7 +34,7 @@ err = Console(stderr=True, soft_wrap=True)
 
 STATUS_COLOUR = {
     "done": "green", "failed": "red", "needs_human": "yellow",
-    "running": "cyan", "queued": "dim", "cancelled": "magenta",
+    "running": "cyan", "queued": "dim", "cancelled": "magenta", "paused": "blue",
 }
 VERDICT_COLOUR = {"pass": "green", "fail": "red", "human": "yellow"}
 # One help string per idea, however many commands take it.
@@ -224,6 +224,7 @@ def submit(
     effort: Optional[str] = typer.Option(None, help="effort for every agent stage that does not set its own (low|medium|high|xhigh|max), or 'auto' to ask TypeSafe in the same call"),
     force: bool = typer.Option(False, "--force", help="queue it even if triage says the request is too vague"),
     run_now: bool = typer.Option(False, "--run", help="work this request now instead of waiting for `sf run`"),
+    paused: bool = typer.Option(False, "--paused", help="queue it paused - `sf run <id>` starts it, like unparking a needs_human request"),
     json_: bool = typer.Option(False, "--json", help=JSON_HELP),
 ):
     """Queue a new request."""
@@ -231,6 +232,8 @@ def submit(
     # click has no mutually exclusive group; say which one is missing rather than a usage dump.
     if (description is None) == (file is None):
         fail("give the request with --description or with --file, not both")
+    if paused and run_now:
+        fail("--paused and --run contradict each other")
     request = description
     if len(name) > settings["name_max"]:
         # A label, not a description - `sf status` gives it one column.
@@ -271,11 +274,19 @@ def submit(
         # On the item, not on the stages: a stage with `with: {effort:}` still wins.
         item["effort"] = chosen
         backend.save(item)
+    if paused:
+        # create() always makes it queued; flipping it here reuses that path instead of
+        # teaching the backend a second entry status.
+        item["status"] = "paused"
+        item["reason"] = "submitted paused %s" % now()
+        backend.save(item)
     if as_json(json_):
-        emit_json({"id": item["id"], "name": name, "pipeline": pipe.name, "repo": str(path)})
+        emit_json({"id": item["id"], "name": name, "pipeline": pipe.name, "repo": str(path),
+                   "status": item["status"]})
     else:
         out.print(kv([("id", item["id"]), ("name", name), ("pipeline", pipe.name),
-                      ("effort", chosen or "")], indent=""))
+                      ("effort", chosen or ""), ("status", item["status"] if paused else "")],
+                     indent=""))
         if read:
             out.print(kv([("triage", "$%.4f" % read.get("cost_usd", 0)),
                           ("specific", "%.2f" % read["specific"] if "specific" in read else "")]))
@@ -396,6 +407,19 @@ def run(
         raise typer.Exit(1)
 
 
+def _state_dir(settings):
+    """Where this installation's own logs and pidfiles live, next to its items.
+
+    Local paths and file:// point at a directory; anything else (a future remote
+    backend) logs beside the config instead, since there is no local directory to use.
+    """
+    url = str(settings["backend"])
+    root = url.partition("://")[2] if url.startswith("file://") else url
+    d = Path(root if "://" not in root else config.home()).expanduser()
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def _detach(settings, ids, repo, concurrency):
     """Re-invoke ourselves to work the queue, and leave it running.
 
@@ -416,12 +440,7 @@ def _detach(settings, ids, repo, concurrency):
 
     # ponytail: one appended log for the whole installation. Split per run if it ever
     # gets read more often than it gets grepped.
-    # Local paths and file:// point at a directory; anything else logs beside the config.
-    url = str(settings["backend"])
-    root = url.partition("://")[2] if url.startswith("file://") else url
-    log = Path(root if "://" not in root else config.home()).expanduser()
-    log.mkdir(parents=True, exist_ok=True)
-    log = log / "run.log"
+    log = _state_dir(settings) / "run.log"
     with open(log, "a") as handle:
         handle.write("\n=== %s %s\n" % (now(), " ".join(argv[2:])))
         handle.flush()
@@ -436,6 +455,148 @@ def _detach(settings, ids, repo, concurrency):
             start_new_session=True,
         )
     return log
+
+
+daemon_app = typer.Typer(add_completion=False,
+                          help="A background engine that works new requests as they land.")
+app.add_typer(daemon_app, name="daemon")
+
+
+def _daemon_pid_file(settings):
+    return _state_dir(settings) / "daemon.pid"
+
+
+def _read_pid(path):
+    """The pid in a pidfile, or None - missing, empty, or garbage all mean "no pid"."""
+    try:
+        return int(path.read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _alive(pid):
+    """Whether a pid is a live process - the same probe `kill -0` uses."""
+    if pid is None:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+@daemon_app.command("start")
+def daemon_start(
+    ctx: typer.Context,
+    interval: int = typer.Option(5, help="seconds between checks for newly queued requests"),
+    concurrency: Optional[int] = typer.Option(None, help="how many items to work at once"),
+    repo: Optional[str] = typer.Option(None, help="only requests for this repo (default: every repo)"),
+    json_: bool = typer.Option(False, "--json", help=JSON_HELP),
+):
+    """Start a background engine that keeps working the queue as requests are submitted.
+
+    Polls every `interval` seconds and drains whatever is queued, under the same
+    concurrency quota `sf run` uses - looping `sf run` is the whole feature. `sf daemon
+    stop` ends it; `sf submit --paused` or `sf pause <id>` keeps a request out of its way.
+    """
+    backend, settings = _open(ctx)
+    if _alive(_read_pid(_daemon_pid_file(settings))):
+        fail("daemon already running - `sf daemon status`")
+    path = str(Path(repo).expanduser().resolve()) if repo else None
+    log = _daemon_spawn(settings, interval, concurrency, path)
+    if as_json(json_):
+        emit_json({"status": "started", "log": str(log)})
+    else:
+        out.print(kv([("status", "started"), ("log", log)], indent=""))
+        out.print("  [dim]tail -f %s[/]" % escape(str(log)))
+
+
+def _daemon_spawn(settings, interval, concurrency, repo):
+    """Re-invoke ourselves as the poll loop, detached the same way `_detach` is."""
+    argv = [sys.executable, "-m", __package__]
+    for flag in ("backend", "worktrees", "pipelines"):
+        argv += ["--%s" % flag, str(settings[flag])]
+    argv += ["daemon", "_serve", "--interval", str(interval)]
+    if concurrency:
+        argv += ["--concurrency", str(concurrency)]
+    if repo:
+        argv += ["--repo", repo]
+    log = _state_dir(settings) / "daemon.log"
+    with open(log, "a") as handle:
+        handle.write("\n=== %s daemon start (interval=%ss)\n" % (now(), interval))
+        handle.flush()
+        subprocess.Popen(
+            argv,
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            cwd=str(Path(__file__).resolve().parents[1]),
+            start_new_session=True,
+        )
+    return log
+
+
+@daemon_app.command("_serve", hidden=True)
+def daemon_serve(
+    ctx: typer.Context,
+    interval: int = typer.Option(5),
+    concurrency: Optional[int] = typer.Option(None),
+    repo: Optional[str] = typer.Option(None),
+):
+    """Internal: the poll loop `daemon start` spawns. Not for a human to type."""
+    backend, settings = _open(ctx)
+    pid_file = _daemon_pid_file(settings)
+    pid_file.write_text(str(os.getpid()))
+
+    def _stop(signum, frame):
+        # Unwound out of whatever's blocking - `time.sleep` between polls, or the
+        # ThreadPoolExecutor's wait inside `engine.run` - same as a Ctrl-C would.
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, _stop)
+    try:
+        while True:
+            engine.run(
+                backend, settings["pipelines"], concurrency, repo=repo,
+                default_concurrency=settings["concurrency"],
+                step_timeout=settings["step_timeout"],
+                agent_attempts=settings["agent_attempts"],
+                retry_wait=settings["retry_wait"],
+                max_input=settings["max_input"],
+                runners_dir=settings["runners"], default_runner=settings["runner"],
+            )
+            time.sleep(interval)
+    finally:
+        pid_file.unlink(missing_ok=True)
+
+
+@daemon_app.command("stop")
+def daemon_stop(ctx: typer.Context, json_: bool = typer.Option(False, "--json", help=JSON_HELP)):
+    """Stop the background engine.
+
+    Whatever step is already running keeps going - `sf cancel <id>` is what kills that.
+    """
+    backend, settings = _open(ctx)
+    pid = _read_pid(_daemon_pid_file(settings))
+    if not _alive(pid):
+        fail("daemon is not running")
+    os.kill(pid, signal.SIGTERM)
+    if as_json(json_):
+        emit_json({"status": "stopping", "pid": pid})
+    else:
+        out.print(kv([("status", "stopping"), ("pid", pid)], indent=""))
+
+
+@daemon_app.command("status")
+def daemon_status(ctx: typer.Context, json_: bool = typer.Option(False, "--json", help=JSON_HELP)):
+    """Whether a background engine is running."""
+    backend, settings = _open(ctx)
+    pid = _read_pid(_daemon_pid_file(settings))
+    running = _alive(pid)
+    if as_json(json_):
+        emit_json({"running": running, "pid": pid if running else None})
+    else:
+        out.print(kv([("running", running), ("pid", pid if running else "")], indent=""))
 
 
 def _unpark(backend, ids, note, stage, settings):
@@ -1276,6 +1437,39 @@ def cancel(
             _kill_step(item["workspace"])
         cancelled.append({"id": item["id"], "status": "cancelled", "stage": item["stage"]})
     _report(cancelled, json_)
+    if bad:
+        raise typer.Exit(1)
+
+
+@app.command()
+def pause(
+    ctx: typer.Context,
+    ids: List[str] = typer.Argument(..., help=ID_HELP),
+    json_: bool = typer.Option(False, "--json", help=JSON_HELP),
+):
+    """Pull queued requests out of the queue without cancelling them.
+
+    Nothing else picks a paused request back up - not `sf run`, not `sf daemon`. `sf run
+    <id>` resumes it, the same way it unparks a `needs_human` request.
+    """
+    backend, _settings = _open(ctx)
+    paused, bad = [], False
+    for item_id in ids:
+        try:
+            item = backend.load(item_id)
+        except FileNotFoundError:
+            _skip(MISSING % escape(item_id))
+            bad = True
+            continue
+        if item["status"] != "queued":
+            _skip("%s is %s, not queued" % (escape(item_id), item["status"]))
+            bad = True
+            continue
+        item["status"] = "paused"
+        item["reason"] = "paused %s" % now()
+        backend.save(item)
+        paused.append({"id": item["id"], "status": "paused"})
+    _report(paused, json_)
     if bad:
         raise typer.Exit(1)
 

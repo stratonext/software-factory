@@ -113,7 +113,8 @@ The default is 2.
 ### Deliberate omissions
 
 No database — a directory of JSON files is inspectable with `cat` and survives the process.
-No queue or broker — one engine drains what is on disk. No web UI. No distributed scheduling.
+No broker — `sf daemon` is one engine on one machine, looping `engine.run` on an interval;
+there is still no distributed scheduling across machines. No web UI.
 
 Retries are the one place that softened, and only as far as a blip warrants. An agent reply
 the engine cannot use at all — an empty response, an overloaded API, output that is not JSON
