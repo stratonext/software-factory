@@ -2,6 +2,9 @@
 
 Maintained by [StratoNext](https://www.stratonext.ai).
 
+[![CI](https://github.com/stratonext/software-factory/actions/workflows/ci.yml/badge.svg)](https://github.com/stratonext/software-factory/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/software-factory.svg)](https://pypi.org/project/software-factory/)
+[![License: MIT](https://img.shields.io/pypi/l/software-factory.svg)](LICENSE)
 [![Listed in Awesome Jev](https://awesomejev.vercel.app/badge.svg)](https://awesomejev.vercel.app)
 
 # Local Software Factory
