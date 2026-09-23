@@ -35,9 +35,11 @@ So the version has to be bumped in a commit, *before* the tag.
    so a bump that stops at `pyproject.toml` leaves the tree dirty on the next `uv run`.
 
 2. **Add the changelog entry.** [`CHANGELOG.md`](../CHANGELOG.md) follows
-   [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the heading must be
-   `## [0.1.0] - YYYY-MM-DD`. `tests/test_docs.py` fails if the version in `pyproject.toml`
-   has no entry, so a forgotten entry is caught by `task verify`, not by a user.
+   [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Move the `[Unreleased]`
+   section's contents under a new `## [0.1.0] - YYYY-MM-DD` heading - the `[Unreleased]`
+   heading itself stays, empty, ready for the next change. `tests/test_docs.py` fails if
+   the version in `pyproject.toml` has no entry, so a forgotten entry is caught by
+   `task verify`, not by a user.
 
 3. **Verify locally.**
 

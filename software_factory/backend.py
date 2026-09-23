@@ -20,7 +20,7 @@ def now():
 
 # Every state an item can be in, in lifecycle order. The engine and `sf cancel`
 # set them; `sf prune` validates what it was asked to clear against them.
-STATUSES = ("queued", "running", "done", "failed", "needs_human", "cancelled")
+STATUSES = ("queued", "running", "done", "failed", "needs_human", "cancelled", "paused")
 # One request, one branch. Defined once because `workspace` creates it and the CLI's
 # `delete` removes it, and the two drifting apart deletes the wrong branch.
 BRANCH = "sf/%s"

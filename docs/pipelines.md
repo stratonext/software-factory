@@ -302,7 +302,7 @@ questions:
             criteria: ["exactly the request", "small extras", "large unrelated changes"] }
 route:                                     # first match wins; a rule with no `when` is default
   - { when: secret, above: 0.5, verdict: human, notes: "possible hardcoded credential" }
-  - { when: scope,  above: 1.5, verdict: fail,  notes: "goes well beyond the request" }
+  - { when: scope,  above: 0.8, verdict: fail,  notes: "goes well beyond the request" }
   - { verdict: pass }
 ```
 
@@ -350,7 +350,7 @@ typesafe:
     secret: 0.5
     destructive: 0.6
     implements: 0.5
-    scope: 1.5
+    scope: 0.8
     satisfied: 0.6
     stubbed: 0.6
 ```

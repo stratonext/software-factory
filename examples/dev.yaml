@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=../docs/pipeline-schema.yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/stratonext/software-factory/main/docs/pipeline-schema.yaml
 #
 # The shortest line there is: one agent, then a commit.
 #

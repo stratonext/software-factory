@@ -2,6 +2,8 @@
 
 Maintained by [StratoNext](https://www.stratonext.ai).
 
+[![Listed in Awesome Jev](https://awesomejev.vercel.app/badge.svg)](https://awesomejev.vercel.app)
+
 # Local Software Factory
 
 A software factory is a system that turns software requests into finished work through a repeatable, automated process. Instead of handling every request manually, you define a pipeline of stages that moves the work from request to completion, with human review when needed.
@@ -52,6 +54,7 @@ The first thing to do is to write a pipeline. Put it in `~/.sf/pipelines/` and e
 mkdir -p ~/.sf/pipelines/prompts
 
 cat > ~/.sf/pipelines/quick.yaml <<'YAML'
+# yaml-language-server: $schema=https://raw.githubusercontent.com/stratonext/software-factory/main/docs/pipeline-schema.yaml
 name: quick
 description: Implement the request with Claude Code, then commit it.
 start: code
@@ -93,6 +96,7 @@ And from anywhere, to see what is happening:
 
 ```bash
 sf status          # everything in flight, across every repo
+sf status -m       # the same table, refreshed once a second until Ctrl-C
 sf show 1          # the full state of one request
 sf replay 1        # play the run back: every step, its route, its artifacts
 ```
@@ -136,6 +140,12 @@ pipeline decides that with a test run or a [Jev judgment](#judging-with-jev).
 A pipeline is a YAML file in the repo's own `.sf/pipelines/<name>.yaml`, or in
 `~/.sf/pipelines/` for every repo. The repo's own copy wins, so two repos can both have a
 `dev` pipeline and mean different processes.
+
+`sf pipelines` lists both tiers, and says which file a bare `--pipeline dev` would reach
+when the name exists in both. To say which one you mean, qualify it: `--pipeline local:dev`
+searches only the repo's own directory, `--pipeline global:dev` only `~/.sf/pipelines`. The
+qualifier is recorded on the request, so `sf status` shows `local:dev` and the run resolves
+the file that was submitted against.
 
 The Quickstart's `quick` is about as small as one gets. Here is the next step up — implement,
 test, and send the work back to the coder if the tests fail:
@@ -182,7 +192,12 @@ each one supports. Adding one is a YAML file too, so a stage can run a different
 Everything a pipeline can say — `input:`, `output:`, `review:` gates, judge steps,
 concurrency, costs — is in [`docs/pipelines.md`](docs/pipelines.md), and
 [`docs/pipeline-schema.yaml`](docs/pipeline-schema.yaml) is the annotated schema your editor
-can use for completion.
+can use for completion. Point at it from any pipeline file, in this repo or any other, with
+a first line:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/stratonext/software-factory/main/docs/pipeline-schema.yaml
+```
 
 ## Judging with Jev
 
@@ -212,7 +227,7 @@ questions:
             criteria: ["exactly the request", "small extras", "large unrelated changes"] }
 route:                                     # first match wins; a rule with no `when` is default
   - { when: secret, above: $secret, verdict: human, notes: "possible hardcoded credential" }
-  - { when: scope,  above: 1.5,     verdict: fail,  notes: "goes well beyond the request" }
+  - { when: scope,  above: 0.8,     verdict: fail,  notes: "goes well beyond the request" }
   - { verdict: pass }
 ```
 
@@ -251,15 +266,21 @@ trusted input, and it must never be able to reach the model as an instruction.
 
 ```bash
 sf init                     # create ~/.sf, its config.yaml and its directories
-sf submit --description "..." --name x    # queue a request against this repo (--file, --pipeline, --run)
-sf run                      # work the queue (--repo, <id>..., --detach, --note, --stage)
-sf status                   # what is in flight, across every repo (--detailed for the block form)
-sf show 1                   # full state of one request
-sf replay 1                 # play a run back (--step, --json)
+sf submit --description "..." --name x    # queue a request against this repo (--file, --pipeline, --run, --paused)
+sf run                      # work the queue in the background, returns at once (--wait to block, --repo, <id>..., --note, --stage)
+sf daemon start              # keep working the queue as requests land (--interval, --concurrency, --repo)
+sf daemon status             # is a background engine running?
+sf daemon stop                # stop it; steps already in flight keep going
+sf status                   # what is in flight, across every repo (--detailed for the block form, --monitor to watch it)
+sf show 1                   # full state of one request - a step in flight shows its pid and elapsed time
+sf replay 1                 # play a run back (--step, --json) - the in-flight step shows too, not just finished ones
 sf config                   # the settings in effect, and where they would be changed
+sf pipelines                # every pipeline the factory can see (--detailed for the block form)
 sf runners                  # every runner a step can use, and whether it is installed
+sf pause 1 2                 # pull queued requests back out; `sf run <id>` resumes one, never past the concurrency quota
 sf cancel 1 2               # stop requests now; `sf run <id>` picks one back up
 sf delete 1 2               # drop requests: item, artifacts and worktree
+sf reset 1 2                # back to the start of the pipeline, notes dropped, history kept
 sf prune                    # clear finished requests in bulk (--status, --older-than)
 sf doctor                   # is this installation able to work anything?
 sf --version                # what is installed

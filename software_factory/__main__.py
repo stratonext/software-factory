@@ -1,18 +1,23 @@
 """sf - submit requests, run the factory, inspect what is in flight."""
 
+import calendar
+import contextlib
 import json
 import os
 import shutil
 import signal
 import subprocess
 import sys
+import termios
 import time
 from pathlib import Path
 from typing import Any, List, NoReturn, Optional
 
 import typer
 from rich.console import Console
+from rich.live import Live
 from rich.markup import escape
+from rich.text import Text
 
 from . import __version__
 from . import runners
@@ -30,7 +35,7 @@ err = Console(stderr=True, soft_wrap=True)
 
 STATUS_COLOUR = {
     "done": "green", "failed": "red", "needs_human": "yellow",
-    "running": "cyan", "queued": "dim", "cancelled": "magenta",
+    "running": "cyan", "queued": "dim", "cancelled": "magenta", "paused": "blue",
 }
 VERDICT_COLOUR = {"pass": "green", "fail": "red", "human": "yellow"}
 # One help string per idea, however many commands take it.
@@ -38,6 +43,13 @@ JSON_HELP = "machine-readable output (already the default when stdout is not a t
 ID_HELP = "a request id, as `sf submit` printed it"
 MISSING = "no such request: %s"
 CLAUDE_TOKEN = "CLAUDE_CODE_OAUTH_TOKEN"
+# How often `--monitor` re-reads the backend, and how wide the stage bar is.
+# The bar is a fixed number of cells so the STAGE column stays a column. Its two glyphs are
+# one terminal cell each, which is what lets the table go on padding with len().
+REFRESH = 1.0
+STAGE_CELLS = 8
+BAR_DONE, BAR_LEFT = "█", "░"
+LIVE_DOT = "●"  # the monitor's heartbeat: lit on the even ticks, dim on the odd ones
 # The options that belong to the app rather than to a command, and how many values each
 # takes. `_hoist` uses this to accept them after the subcommand as well as before.
 GLOBAL = {"--backend": 1, "--worktrees": 1, "--pipelines": 1, "--skill": 0, "--version": 0}
@@ -146,7 +158,8 @@ def root(
     if ctx.invoked_subcommand is None:
         # json_ spelled out: called as a function, the parameter's default is typer's
         # OptionInfo object, which is truthy.
-        status(ctx, detailed=False, json_=False)  # bare `factory` is "what is in flight", like `docker ps`
+        # bare `sf` is "what is in flight", like `docker ps`
+        status(ctx, detailed=False, monitor=False, json_=False)
 
 
 def _open(ctx):
@@ -212,6 +225,7 @@ def submit(
     effort: Optional[str] = typer.Option(None, help="effort for every agent stage that does not set its own (low|medium|high|xhigh|max), or 'auto' to ask TypeSafe in the same call"),
     force: bool = typer.Option(False, "--force", help="queue it even if triage says the request is too vague"),
     run_now: bool = typer.Option(False, "--run", help="work this request now instead of waiting for `sf run`"),
+    paused: bool = typer.Option(False, "--paused", help="queue it paused - `sf run <id>` starts it, like unparking a needs_human request"),
     json_: bool = typer.Option(False, "--json", help=JSON_HELP),
 ):
     """Queue a new request."""
@@ -219,6 +233,8 @@ def submit(
     # click has no mutually exclusive group; say which one is missing rather than a usage dump.
     if (description is None) == (file is None):
         fail("give the request with --description or with --file, not both")
+    if paused and run_now:
+        fail("--paused and --run contradict each other")
     request = description
     if len(name) > settings["name_max"]:
         # A label, not a description - `sf status` gives it one column.
@@ -244,34 +260,46 @@ def submit(
              "or --force\n  %s" % (read["specific"], escape(request[:200])))
     if pipeline == "auto":
         pipeline = read.get("pipeline")  # None falls through to the configured default
+    wanted = pipeline or settings["pipeline"]
     try:
         pipe = pl.load(
-            pl.search_path(path, settings["pipelines"]), pipeline or settings["pipeline"],
+            pl.search_path(path, settings["pipelines"]), wanted,
             runners.search_path(path, settings["runners"]), settings["runner"],
         )
     except (FileNotFoundError, ValueError) as e:
         # ValueError too: a pipeline written for 0.1 fails here with the replacement named,
         # and that message is the whole point of the break - a traceback buries it.
         fail(escape(str(e)))
-    item = backend.create(request, pipe.name, pipe.start, repo=str(path), name=name)
+    # Recorded with the qualifier the user gave, so the run resolves the file they meant
+    # and `sf status` shows `local:dev` rather than a `dev` that could be either one.
+    chosen_pipeline = pl.qualified(wanted, pipe.name)
+    item = backend.create(request, chosen_pipeline, pipe.start, repo=str(path), name=name)
     chosen = effort if effort and effort != "auto" else read.get("effort")
     if chosen:
         # On the item, not on the stages: a stage with `with: {effort:}` still wins.
         item["effort"] = chosen
         backend.save(item)
+    if paused:
+        # create() always makes it queued; flipping it here reuses that path instead of
+        # teaching the backend a second entry status.
+        item["status"] = "paused"
+        item["reason"] = "submitted paused %s" % now()
+        backend.save(item)
     if as_json(json_):
-        emit_json({"id": item["id"], "name": name, "pipeline": pipe.name, "repo": str(path)})
+        emit_json({"id": item["id"], "name": name, "pipeline": chosen_pipeline, "repo": str(path),
+                   "status": item["status"]})
     else:
-        out.print(kv([("id", item["id"]), ("name", name), ("pipeline", pipe.name),
-                      ("effort", chosen or "")], indent=""))
+        out.print(kv([("id", item["id"]), ("name", name), ("pipeline", chosen_pipeline),
+                      ("effort", chosen or ""), ("status", item["status"] if paused else "")],
+                     indent=""))
         if read:
             out.print(kv([("triage", "$%.4f" % read.get("cost_usd", 0)),
                           ("specific", "%.2f" % read["specific"] if "specific" in read else "")]))
     if run_now:
         # ponytail: hand off to `run`, so --run prints exactly what `sf run <id>` prints.
-        # detach=False: --run means "work it now", in front of me. repo: submit's --repo is
+        # wait=True: --run means "work it now", in front of me. repo: submit's --repo is
         # where to work, run's is a filter - the id already says which.
-        run(ctx, ids=[item["id"]], repo=None, concurrency=None, detach=False, note="",
+        run(ctx, ids=[item["id"]], repo=None, concurrency=None, wait=True, note="",
             stage=None, json_=json_)
 
 
@@ -313,34 +341,44 @@ def _repo_problem(repo):
     return None
 
 
+def _repo_here():
+    """The current directory if it is inside a git repo, else None.
+
+    The same path `sf submit` would record - so it is the same `.sf/pipelines` a `local:`
+    name would resolve in. No commit required: listing what is on disk is not running it.
+    """
+    probe = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"],
+                           capture_output=True, text=True)
+    return Path.cwd() if probe.returncode == 0 else None
+
+
 @app.command()
 def run(
     ctx: typer.Context,
     ids: Optional[List[str]] = typer.Argument(None, help="only these requests; parked ones are unparked first"),
     repo: Optional[str] = typer.Option(None, help="only requests for this repo; a bare --repo means here (default: every repo)"),
     concurrency: Optional[int] = typer.Option(None, help="how many items to work at once"),
-    detach: bool = typer.Option(False, "--detach", help="leave an engine running in the background and return at once"),
+    wait: bool = typer.Option(False, "--wait", help="block until the queue is worked instead of returning at once"),
     note: str = typer.Option("", help="your answer to the agent, added to its context"),
     stage: Optional[str] = typer.Option(None, help="re-enter at this stage instead of the one the request is parked at"),
     json_: bool = typer.Option(False, "--json", help=JSON_HELP),
 ):
     """Work the queue; by default everything that is queued.
 
-    Blocks until the queue is worked. `--detach` forks an engine that outlives this command
-    and returns at once - the right thing for a long line, the wrong thing for anything that
-    should stop when you stop watching it. Blocking, the exit code is 1 unless something
-    reached `done`, so it can gate CI.
-
+    Leaves an engine working in the background and returns at once - the right thing for a
+    long line, the wrong thing for a script that needs to know how it went. `--wait` blocks
+    until the queue is worked instead; blocking, the exit code is 1 unless something reached
+    `done`, so it can gate CI.
     """
     backend, settings = _open(ctx)
     path = str(Path(repo).expanduser().resolve()) if repo else None
     ids = list(ids or [])
-    # Unpark before deciding to detach: a parked request is not queued, so the detached
-    # path below would report "nothing queued" and drop --note on the floor.
+    # Unpark before deciding whether to wait: a parked request is not queued, so the
+    # detached path below would report "nothing queued" and drop --note on the floor.
     problem = _unpark(backend, ids, note, stage, settings)
     if problem:
         fail(problem)
-    if detach:
+    if not wait:
         items = engine.queued(backend, ids, path)
         if not items:
             out.print("[dim]nothing queued[/]")
@@ -353,6 +391,12 @@ def run(
             out.print(kv([("id", item["id"]), ("status", "started")], indent=""))
         out.print("  [dim]sf status[/]  what is in flight")
         out.print("  [dim]tail -f %s[/]" % escape(str(log)))
+        return
+    # Checked up front so a queue that is merely at capacity (every worker elsewhere
+    # already spoken for) is not reported the same as one with nothing in it at all.
+    items = engine.queued(backend, ids, path)
+    if not items:
+        out.print("[dim]nothing queued[/]")
         return
     done = engine.run(
         backend,
@@ -373,7 +417,7 @@ def run(
     if as_json(json_):
         emit_json([_summary(i, settings, {}) for i in done])
     elif not done:
-        out.print("[dim]nothing queued[/]")
+        out.print("[dim]at capacity - still queued, nothing started[/]")
     else:
         for item in done:
             out.print(kv([("id", item["id"]), ("stage", item["stage"])], indent="")
@@ -384,11 +428,24 @@ def run(
         raise typer.Exit(1)
 
 
+def _state_dir(settings):
+    """Where this installation's own logs and pidfiles live, next to its items.
+
+    Local paths and file:// point at a directory; anything else (a future remote
+    backend) logs beside the config instead, since there is no local directory to use.
+    """
+    url = str(settings["backend"])
+    root = url.partition("://")[2] if url.startswith("file://") else url
+    d = Path(root if "://" not in root else config.home()).expanduser()
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def _detach(settings, ids, repo, concurrency):
     """Re-invoke ourselves to work the queue, and leave it running.
 
-    Opt-in, never the default: a process that outlives the command which started it is
-    something you should have to ask for. Two engines racing for the same item is already
+    The default, not an opt-in: a command that returns before minutes of agent time are
+    up is the right shape for a terminal. Two engines racing for the same item is already
     safe - `claim` is a compare-and-set - so a detached run needs no lock of its own.
     """
     # __package__, not a literal: the package was renamed once and this line was not,
@@ -396,7 +453,7 @@ def _detach(settings, ids, repo, concurrency):
     argv = [sys.executable, "-m", __package__]
     for flag in ("backend", "worktrees", "pipelines"):
         argv += ["--%s" % flag, str(settings[flag])]
-    argv += ["run", *ids]  # the child blocks: it *is* the engine
+    argv += ["run", "--wait", *ids]  # the child blocks: it *is* the engine
     if repo:
         argv += ["--repo", repo]
     if concurrency:
@@ -404,12 +461,7 @@ def _detach(settings, ids, repo, concurrency):
 
     # ponytail: one appended log for the whole installation. Split per run if it ever
     # gets read more often than it gets grepped.
-    # Local paths and file:// point at a directory; anything else logs beside the config.
-    url = str(settings["backend"])
-    root = url.partition("://")[2] if url.startswith("file://") else url
-    log = Path(root if "://" not in root else config.home()).expanduser()
-    log.mkdir(parents=True, exist_ok=True)
-    log = log / "run.log"
+    log = _state_dir(settings) / "run.log"
     with open(log, "a") as handle:
         handle.write("\n=== %s %s\n" % (now(), " ".join(argv[2:])))
         handle.flush()
@@ -424,6 +476,148 @@ def _detach(settings, ids, repo, concurrency):
             start_new_session=True,
         )
     return log
+
+
+daemon_app = typer.Typer(add_completion=False,
+                          help="A background engine that works new requests as they land.")
+app.add_typer(daemon_app, name="daemon")
+
+
+def _daemon_pid_file(settings):
+    return _state_dir(settings) / "daemon.pid"
+
+
+def _read_pid(path):
+    """The pid in a pidfile, or None - missing, empty, or garbage all mean "no pid"."""
+    try:
+        return int(path.read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _alive(pid):
+    """Whether a pid is a live process - the same probe `kill -0` uses."""
+    if pid is None:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+@daemon_app.command("start")
+def daemon_start(
+    ctx: typer.Context,
+    interval: int = typer.Option(5, help="seconds between checks for newly queued requests"),
+    concurrency: Optional[int] = typer.Option(None, help="how many items to work at once"),
+    repo: Optional[str] = typer.Option(None, help="only requests for this repo (default: every repo)"),
+    json_: bool = typer.Option(False, "--json", help=JSON_HELP),
+):
+    """Start a background engine that keeps working the queue as requests are submitted.
+
+    Polls every `interval` seconds and drains whatever is queued, under the same
+    concurrency quota `sf run` uses - looping `sf run` is the whole feature. `sf daemon
+    stop` ends it; `sf submit --paused` or `sf pause <id>` keeps a request out of its way.
+    """
+    backend, settings = _open(ctx)
+    if _alive(_read_pid(_daemon_pid_file(settings))):
+        fail("daemon already running - `sf daemon status`")
+    path = str(Path(repo).expanduser().resolve()) if repo else None
+    log = _daemon_spawn(settings, interval, concurrency, path)
+    if as_json(json_):
+        emit_json({"status": "started", "log": str(log)})
+    else:
+        out.print(kv([("status", "started"), ("log", log)], indent=""))
+        out.print("  [dim]tail -f %s[/]" % escape(str(log)))
+
+
+def _daemon_spawn(settings, interval, concurrency, repo):
+    """Re-invoke ourselves as the poll loop, detached the same way `_detach` is."""
+    argv = [sys.executable, "-m", __package__]
+    for flag in ("backend", "worktrees", "pipelines"):
+        argv += ["--%s" % flag, str(settings[flag])]
+    argv += ["daemon", "_serve", "--interval", str(interval)]
+    if concurrency:
+        argv += ["--concurrency", str(concurrency)]
+    if repo:
+        argv += ["--repo", repo]
+    log = _state_dir(settings) / "daemon.log"
+    with open(log, "a") as handle:
+        handle.write("\n=== %s daemon start (interval=%ss)\n" % (now(), interval))
+        handle.flush()
+        subprocess.Popen(
+            argv,
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            cwd=str(Path(__file__).resolve().parents[1]),
+            start_new_session=True,
+        )
+    return log
+
+
+@daemon_app.command("_serve", hidden=True)
+def daemon_serve(
+    ctx: typer.Context,
+    interval: int = typer.Option(5),
+    concurrency: Optional[int] = typer.Option(None),
+    repo: Optional[str] = typer.Option(None),
+):
+    """Internal: the poll loop `daemon start` spawns. Not for a human to type."""
+    backend, settings = _open(ctx)
+    pid_file = _daemon_pid_file(settings)
+    pid_file.write_text(str(os.getpid()))
+
+    def _stop(signum, frame):
+        # Unwound out of whatever's blocking - `time.sleep` between polls, or the
+        # ThreadPoolExecutor's wait inside `engine.run` - same as a Ctrl-C would.
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, _stop)
+    try:
+        while True:
+            engine.run(
+                backend, settings["pipelines"], concurrency, repo=repo,
+                default_concurrency=settings["concurrency"],
+                step_timeout=settings["step_timeout"],
+                agent_attempts=settings["agent_attempts"],
+                retry_wait=settings["retry_wait"],
+                max_input=settings["max_input"],
+                runners_dir=settings["runners"], default_runner=settings["runner"],
+            )
+            time.sleep(interval)
+    finally:
+        pid_file.unlink(missing_ok=True)
+
+
+@daemon_app.command("stop")
+def daemon_stop(ctx: typer.Context, json_: bool = typer.Option(False, "--json", help=JSON_HELP)):
+    """Stop the background engine.
+
+    Whatever step is already running keeps going - `sf cancel <id>` is what kills that.
+    """
+    backend, settings = _open(ctx)
+    pid = _read_pid(_daemon_pid_file(settings))
+    if not _alive(pid):
+        fail("daemon is not running")
+    os.kill(pid, signal.SIGTERM)
+    if as_json(json_):
+        emit_json({"status": "stopping", "pid": pid})
+    else:
+        out.print(kv([("status", "stopping"), ("pid", pid)], indent=""))
+
+
+@daemon_app.command("status")
+def daemon_status(ctx: typer.Context, json_: bool = typer.Option(False, "--json", help=JSON_HELP)):
+    """Whether a background engine is running."""
+    backend, settings = _open(ctx)
+    pid = _read_pid(_daemon_pid_file(settings))
+    running = _alive(pid)
+    if as_json(json_):
+        emit_json({"running": running, "pid": pid if running else None})
+    else:
+        out.print(kv([("running", running), ("pid", pid if running else "")], indent=""))
 
 
 def _unpark(backend, ids, note, stage, settings):
@@ -471,15 +665,41 @@ def _status_markup(status, reason=""):
     return "[%s]%s[/]" % (colour, text) if colour else text
 
 
-def _pipeline_cell(item):
-    """`dev@1`, or `dev@1,2` when the file was edited mid-flight.
+def _pipeline_cell(item, settings, cache):
+    """`local:dev@1`, or `global:dev@1,2` when the file was edited mid-flight.
 
-    The versions this request actually ran steps under, in the order it ran them. A
-    queued request has none yet, and history written before versions existed has none
-    either - both print the bare name.
+    A qualified name (`local:dev`, `global:dev`) is shown as recorded - that already says
+    which file the run resolves. A bare name still ran under exactly one tier, so the
+    prefix is filled in from where it actually resolved (best-effort: an unreadable
+    pipeline, same as `_pipeline_of`, prints the bare name rather than guessing).
+
+    The `@version[,version]` suffix is the versions this request actually ran steps
+    under, in the order it ran them. A queued request has none yet, and history written
+    before versions existed has none either - both print without a suffix.
     """
+    tier, bare = pl.split(item["pipeline"])
+    if not tier:
+        tier = _tier(item, settings, cache)
+    name = "%s:%s" % (tier, bare) if tier else item["pipeline"]
     seen = dict.fromkeys(str(h["version"]) for h in item["history"] if "version" in h)
-    return item["pipeline"] + ("@%s" % ",".join(seen) if seen else "")
+    return name + ("@%s" % ",".join(seen) if seen else "")
+
+
+def _tier(item, settings, cache):
+    """'local' or 'global' - which directory a bare pipeline name actually resolved from.
+
+    None when it cannot be read at all (moved repo, broken YAML): `_pipeline_of` already
+    decided that, and a display helper has no business guessing past it.
+    """
+    pipe = _pipeline_of(item, settings, cache)
+    if pipe is None:
+        return None
+    for i, d in enumerate(pl.search_path(item.get("repo"), settings["pipelines"])):
+        if Path(d) == pipe.dir:
+            return "local" if item.get("repo") and i == 0 else "global"
+    return None
+
+
 def _pipeline_of(item, settings, cache):
     """The request's pipeline as it is on disk now, or None if it cannot be read.
 
@@ -499,8 +719,25 @@ def _pipeline_of(item, settings, cache):
     return cache[key]
 
 
-def _stage_label(item, settings, cache):
-    """`code 2/5` - the stage, and where it sits in its pipeline's declared order.
+def _bar(at, total):
+    """`███░░░░░` - the same rank and total _stage_label already has, drawn.
+
+    Blocks, so it reads as a bar and not as a picture of one; _painted() colours the done
+    run green and the rest dim. Plain text, though, and a fixed STAGE_CELLS width: the table
+    pads its cells with ljust before any markup goes on, so a colour tag living inside
+    this string would shift every column after STAGE by the length of the tag. Rounded up:
+    any progress at all lights a cell, and only a finished request fills the bar.
+    """
+    filled = -(-at * STAGE_CELLS // total) if total else 0
+    return "%s%s " % (BAR_DONE * filled, BAR_LEFT * (STAGE_CELLS - filled))
+
+
+def _stage_label(item, settings, cache, bar=False):
+    """`code ███░░░░░ 2/5`, or bare `code 2/5` without bar - the stage, and where it
+    sits in its pipeline's declared order.
+
+    Every human view draws the bar; only the JSON keeps the bare counter, because that
+    field is something a script reads.
 
     Falls back to the bare stage name when the pipeline cannot be read (repo moved,
     YAML broken) or no longer has the stage (`--stage` into a since-edited pipeline):
@@ -517,21 +754,36 @@ def _stage_label(item, settings, cache):
     else:
         # The count is what is behind the request, not what it is about to do: a queued
         # request has not worked the stage it is sitting at, so a new one reads `plan 0/5`.
-        at = rank if item["status"] == "queued" else rank + 1
+        # `paused` is the same position held back from the queue, not a stage it ran. A
+        # `running` request has not finished the stage it is sitting at either - that step
+        # is what is currently in flight, not one already behind it - so it reads the same
+        # `plan 0/5` rather than claiming a stage its own "running:" line says is not done.
+        at = rank if item["status"] in ("queued", "paused", "running") else rank + 1
     # The step's own `name:` when it declared one - it is the label a person wrote for
     # this station, and the key is only ever the thing that routes.
     shown = pipe.label(item["stage"]) if item["stage"] in pipe.steps else item["stage"]
-    return "%s %d/%d" % (shown, at, total)
+    return "%s %s%d/%d" % (shown, _bar(at, total) if bar else "", at, total)
 
 
 @app.command()
 def status(
     ctx: typer.Context,
     detailed: bool = typer.Option(False, "--detailed", "-d", help="a block per request, with its request text"),
+    monitor: bool = typer.Option(False, "--monitor", "-m", help="keep the table on screen, "
+                                 "refreshed once a second, until Ctrl-C"),
     json_: bool = typer.Option(False, "--json", help=JSON_HELP),
 ):
     """What is in flight, across every repo - the `docker ps` of the factory."""
     backend, settings = _open(ctx)
+    if monitor:
+        # Both of these are "there is nothing here to refresh", said before anything prints.
+        if json_:
+            fail("--monitor and --json are different things: one redraws a table, the other "
+                 "prints one document. Pick one.")
+        if not sys.stdout.isatty():
+            fail("--monitor needs a terminal: nothing redraws in a pipe or a file. "
+                 "Drop it, or poll `sf status --json`.")
+        return _monitor(backend, settings)
     items = backend.all()
     cache: dict[str, Any] = {}  # one pipeline read per pipeline, for this listing only
     if as_json(json_):
@@ -540,7 +792,7 @@ def status(
     if not items:
         out.print('no work items. [bold]sf submit --description "<request>" --name <label>[/] in a repo to start one.')
         return
-    rows = [_summary(i, settings, cache) for i in items]
+    rows = [_summary(i, settings, cache, bar=True) for i in items]
     if not detailed:
         return _table(items, rows)
     # Two lines per item, the first one aligned so ids and names stay a column you can
@@ -552,40 +804,130 @@ def status(
             _status_markup(r["status"], _clip(" ".join(r["reason"].split()), 80)
                        if r["status"] == "needs_human" else ""),
         ))
-        out.print(kv([("repo", r["repo"]), ("pipeline", r["pipeline"]), ("stage", r["stage"])]))
+        out.print(_painted(kv([("repo", r["repo"]), ("pipeline", r["pipeline"]),
+                               ("stage", r["stage"])])))
         out.print(kv([("passes", r["passes"]), ("cost", _cost(r["cost_usd"])),
                       ("request", _clip(r["request"], 60))]))
         out.print()
 
 
 def _table(items, rows):
-    """Every request, one padded line each - the whole list, never paged or cropped.
+    """Every request, one padded line each - the whole list, never paged or cropped."""
+    out.print(_painted("\n".join(_table_lines(items, rows))))
+
+
+def _painted(markup):
+    """Markup as a Text, with the stage bars coloured in.
+
+    The colour goes on the finished text rather than inside a cell: the table pads its
+    cells on their length, so a tag living in one would move every column after it. Both
+    glyphs are the bar's alone, so a regex over the whole thing paints exactly the bars.
+
+    no_wrap after the fact, because from_markup only grew the keyword after rich 13,
+    which is what we depend on - it is what soft_wrap does for a print, said for a
+    renderable: one line per request, neither folded nor cropped at the terminal width.
+    """
+    text = Text.from_markup(markup, overflow="ignore")
+    text.no_wrap = True
+    text.highlight_regex("%s+" % BAR_DONE, "green")
+    text.highlight_regex("%s+" % BAR_LEFT, "dim")
+    return text
+
+
+def _table_lines(items, rows):
+    """The table as markup, a line at a time - the header, then one line per request.
 
     Hand-padded, not a rich Table: a Table folds a long needs_human reason at the console
     width, and this view promises one line per request so `| grep` reads it. Colour goes
     on after the padding (STATUS is last, so its markup cannot disturb a column), and
-    out.print with soft_wrap neither wraps nor crops.
+    _painted() neither wraps nor crops. Lines rather than prints, so --monitor can hand
+    the same table to Live instead.
     """
     head = ("REQUEST", "NAME", "REPO", "PIPELINE", "STAGE", "PASSES", "COST")
     keys = ("id", "name", "repo", "pipeline", "stage", "passes", "cost_usd")
     cells = [tuple(_cost(r[k]) if k == "cost_usd" else str(r[k]) for k in keys) for r in rows]
     widths = [max(len(c[n]) for c in [head] + cells) for n in range(len(head))]
-    out.print("[bold]%s  STATUS[/]" % "  ".join(v.ljust(w) for v, w in zip(head, widths)))
-    for item, row in zip(items, cells):
-        out.print("%s  %s" % (
+    return ["[bold]%s  STATUS[/]" % "  ".join(v.ljust(w) for v, w in zip(head, widths))] + [
+        "%s  %s" % (
             "  ".join(escape(v.ljust(w)) for v, w in zip(row, widths)),
             _status_markup(item["status"], item.get("reason", "") if item["status"] == "needs_human" else ""),
-        ))
+        )
+        for item, row in zip(items, cells)
+    ]
 
 
-def _summary(item, settings, cache=None):
+def _monitor(backend, settings):
+    """`sf status -m`: the table, redrawn in place once a second until Ctrl-C.
+
+    Live rather than clearing the screen - it repaints the lines it already owns, so
+    whatever was in the terminal before the command survives above it. Which is also why
+    the echo goes off: Live repaints the region it believes it owns, so a keystroke the
+    terminal echoed into that region - an Enter above all, which scrolls everything up a
+    line - leaves a stale copy of the first row behind. Nothing here reads stdin, so
+    there is nothing to see.
+    """
+    with _quiet_keys():
+        try:
+            with Live(console=out, auto_refresh=False) as live:
+                tick = 0
+                while True:
+                    live.update(_frame(backend, settings, tick), refresh=True)
+                    tick += 1
+                    time.sleep(REFRESH)
+        except KeyboardInterrupt:
+            return  # Ctrl-C is how this command ends: exit 0, no traceback
+
+
+@contextlib.contextmanager
+def _quiet_keys():
+    """Terminal echo off for the block, and back on however it leaves - Ctrl-C included.
+
+    A stdin that is not a terminal has no echo to mute and raises here; that is fine, the
+    keystrokes it does not have cannot land on the screen either.
+    """
+    try:
+        fd = sys.stdin.fileno()
+        before = termios.tcgetattr(fd)
+    except (ValueError, OSError, termios.error):
+        yield
+        return
+    muted = list(before)
+    muted[3] &= ~termios.ECHO  # lflag, the one that puts keystrokes on the screen
+    try:
+        termios.tcsetattr(fd, termios.TCSADRAIN, muted)
+        yield
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, before)
+
+
+def _frame(backend, settings, tick=0):
+    """One tick of the monitor: the table, over a heartbeat that says it is still ticking.
+
+    Everything is read again, including a fresh pipeline cache: a request submitted or
+    finished since the last tick has to appear or go, and a pipeline edited mid-flight
+    must not go on being shown with the stages it had when the command started.
+
+    The dot pulses off `tick` rather than a `blink` style, which plenty of terminals
+    quietly drop - and a dot that pulses because the frame was rebuilt is the honest
+    signal: it stops moving exactly when the refresh does.
+    """
+    items = backend.all()
+    cache: dict[str, Any] = {}
+    rows = [_summary(i, settings, cache, bar=True) for i in items]
+    table = _table_lines(items, rows) if items else ["no work items."]
+    beat = "[green]%s[/]" % LIVE_DOT if tick % 2 == 0 else "[dim]%s[/]" % LIVE_DOT
+    return _painted("\n".join(table + [
+        "%s [dim]live - every %gs - Ctrl-C to stop[/]" % (beat, REFRESH)]))
+
+
+def _summary(item, settings, cache=None, bar=False):
     """One work item as flat fields - what both the JSON and the human form print."""
     return {
         "id": item["id"],
         "name": item.get("name", "") or "-",
         "repo": Path(item.get("repo", "")).name or "-",
-        "pipeline": _pipeline_cell(item),
-        "stage": _stage_label(item, settings, {} if cache is None else cache),
+        "pipeline": _pipeline_cell(item, settings, {} if cache is None else cache),
+        "stage": _stage_label(item, settings, {} if cache is None else cache, bar),
         "passes": item["passes"],
         "cost_usd": _total_cost(item["history"]),
         "status": item["status"],
@@ -698,6 +1040,85 @@ def _label(known):
     return "%s v%s" % (known["name"], known["version"])
 
 
+def _loads(directory, name):
+    """Whether a pipeline actually loads, and its step count - `summary()` only parses
+    the YAML enough for name/version/description, so this is the rest of `sf doctor`'s
+    old per-pipeline check, now `sf pipelines`' job instead."""
+    try:
+        pipe = pl.load(directory, name)
+        return {"valid": True, "steps": len(pipe.steps), "error": ""}
+    except Exception as e:  # whatever a half-written YAML raises is the finding
+        return {"valid": False, "steps": None, "error": str(e)}
+
+
+@app.command("pipelines")
+def pipelines_cmd(
+    ctx: typer.Context,
+    detailed: bool = typer.Option(False, "--detailed", "-d",
+                                  help="a block per pipeline, with its path and description"),
+    json_: bool = typer.Option(False, "--json", help=JSON_HELP),
+):
+    """Every pipeline the factory can see: the installation-wide ones, then this repo's own.
+
+    A name in both tiers resolves to the repo's own copy, so `--pipeline dev` is the local
+    one and `--pipeline global:dev` the other - the listing says which is which.
+    """
+    _backend, settings = _open(ctx)
+    repo = _repo_here()
+    local_dir = pl.repo_pipelines(repo) if repo else None
+    groups = [("global", Path(settings["pipelines"]))]
+    if local_dir:
+        groups.append(("local", local_dir))
+    local = {k["name"] for k in _known(local_dir)} if local_dir else set()
+    rows = [
+        {**k, "flavor": flavor, "directory": str(d),
+         "path": str(Path(d) / ("%s.yaml" % k["name"])),
+         # Which row a bare `--pipeline <name>` reaches: the repo's own tier first.
+         "bare": flavor == "local" or k["name"] not in local,
+         **_loads(d, k["name"])}
+        for flavor, d in groups for k in _known(d)
+    ]
+    shadowed = local & {r["name"] for r in rows if r["flavor"] == "global"}
+    if as_json(json_):
+        emit_json(rows)
+        return
+    if not rows:
+        out.print("[yellow]no pipelines in %s[/]  [dim]write one: %s[/]" % (
+            escape(", ".join(str(d) for _f, d in groups)), escape("%s/pipelines" % pl.REPO_DIR)))
+        return
+    if detailed:
+        # A block per pipeline, styled like `status --detailed`: a bold header line, then
+        # indented kv() lines - clearer than the old dump grouped under a flavor heading.
+        wide = max(len(_label(r)) for r in rows)
+        for r in rows:
+            # The shadow is what a listing is for: two files, one name, and only one of
+            # them is what `--pipeline dev` has been running all along.
+            shadow = "" if r["name"] not in shadowed else (
+                "  [dim](shadows global:%s)[/]" % escape(r["name"]) if r["bare"]
+                else "  [yellow](shadowed by local:%s)[/]" % escape(r["name"]))
+            out.print("[bold]%s[/]  %s%s" % (escape(_label(r).ljust(wide)), r["flavor"], shadow))
+            out.print(kv([("path", r["path"])]))
+            if r["description"]:
+                out.print(kv([("description", r["description"])]))
+            loads = "%d step(s)" % r["steps"] if r["valid"] else "does not load: %s" % r["error"]
+            out.print(kv([("loads", loads)]))
+            out.print()
+    else:
+        # Hand-padded like the status table, and for the same reason: one line per
+        # pipeline, so `| grep local` is a filter rather than a lost heading.
+        cells = [(r["name"], r["path"], r["flavor"],
+                  "%d step(s)" % r["steps"] if r["valid"] else "does not load: %s" % r["error"])
+                 for r in rows]
+        widths = [max(len(c[n]) for c in cells) for n in range(4)]
+        for c, r in zip(cells, rows):
+            padded = [escape(v.ljust(w)) for v, w in zip(c, widths)]
+            if not r["valid"]:
+                padded[3] = "[red]%s[/]" % padded[3]
+            out.print("  ".join(padded).rstrip())
+    if not repo:
+        out.print("[dim]no local pipelines: this directory is not in a git repo[/]")
+
+
 @app.command("runners")
 def runners_cmd(ctx: typer.Context, json_: bool = typer.Option(False, "--json", help=JSON_HELP)):
     """Every runner a step can `uses:` - where it came from, and what it can do.
@@ -775,6 +1196,16 @@ def show(
                   ("cost", _cost(r["cost_usd"])), ("started", item.get("started", "")),
                   ("ended", item.get("ended", ""))]))
     out.print(kv([("workspace", item.get("workspace", ""))]))
+    running = item.get("running_step")
+    if running:
+        # Live, not history: nothing here comes from a completed step, so it says so
+        # separately rather than pretending to be one.
+        pid = _running_pid(item.get("workspace", ""))
+        out.print(kv([
+            ("running", "step %d: %s (%s)" % (running["step"],
+             running.get("label") or running["stage"], running["kind"])),
+            ("pid", pid or "-"), ("elapsed", _duration(_elapsed(running["started"]))),
+        ]))
     out.print("\n  %s" % escape(item["request"]))
     for n in item["notes"]:
         out.print(kv([("note", "[%s] %s" % (n["stage"], _clip(" ".join(n["text"].split()), 150)))]))
@@ -810,7 +1241,11 @@ def _route(item):
     """The path actually taken, rework loops and all."""
     history = item["history"]
     if not history:
-        return "(not started)"
+        # A first step already in flight has started, whatever an empty history says on
+        # its own - the running row below makes the same claim, and this must not
+        # contradict it.
+        running = item.get("running_step")
+        return "%s  [running]" % running["stage"] if running else "(not started)"
     # Every step but the last carries its own separator, halts included: history is
     # cumulative across runs, so a halted step with nothing after it would have the
     # next run's stage concatenated straight onto its name.
@@ -840,6 +1275,11 @@ def replay(
     if step is not None:  # not truthiness: `--step 0` must say there is no step 0
         matches = [h for h in history if h["step"] == step]
         if not matches:
+            running = item.get("running_step")
+            if running and running["step"] == step:
+                if artifact:
+                    fail("step %d is still running - artifacts land once it finishes" % step)
+                return _replay_running_step(item, running)
             fail("no step %d in %s (%d steps)" % (step, id, len(history)))
         return _replay_step(backend, item, matches[0], artifact)
 
@@ -862,6 +1302,7 @@ def replay(
                 },
                 "notes": item["notes"],
                 "steps": history,
+                "running_step": item.get("running_step"),
             }
         )
         return
@@ -900,6 +1341,16 @@ def replay(
             out.print("       [dim]%s[/]" % escape(notes[:150] + ("..." if len(notes) > 150 else "")))
         if h.get("artifacts"):
             out.print("       [dim]%s[/]" % escape(" - ".join(sorted(h["artifacts"]))))
+    running = item.get("running_step")
+    if running:
+        pid = _running_pid(item.get("workspace", ""))
+        out.print(
+            "  #%-3d %-10s %-8s %-7s %s %-7s %6s"
+            % (running["step"], escape(running.get("label") or running["stage"]),
+               escape(running["kind"]), _how(running),
+               "[cyan]running[/]", _cost(None), _duration(_elapsed(running["started"])))
+        )
+        out.print("       [dim]pid %s - still running[/]" % (pid or "?"))
     out.print("\n  [dim]sf replay %s --step N   to open one up[/]" % item["id"])
 
 
@@ -933,6 +1384,19 @@ def _replay_step(backend, item, h, only):
     if not only and rest:
         # The ones this did not just print - "other" has to mean other.
         out.print("[dim]other artifacts: %s[/]" % escape(" ".join(rest)))
+
+
+def _replay_running_step(item, running):
+    """What there is to say about a step still in flight - no history entry, no
+    artifacts, since none of that lands until the step finishes."""
+    pid = _running_pid(item.get("workspace", ""))
+    out.print("[bold]# %s step %d: %s (%s) -> still running[/]\n" % (
+        item["id"], running["step"], escape(running.get("label") or running["stage"]),
+        escape(running["kind"])))
+    out.print(kv([("uses", running.get("uses", "")), ("pid", pid or "-"),
+                  ("started", running["started"]),
+                  ("elapsed", _duration(_elapsed(running["started"])))]))
+    out.print("\n  [dim]sf cancel %s   to stop it[/]" % item["id"])
 
 
 @app.command()
@@ -1151,6 +1615,97 @@ def cancel(
 
 
 @app.command()
+def pause(
+    ctx: typer.Context,
+    ids: List[str] = typer.Argument(..., help=ID_HELP),
+    json_: bool = typer.Option(False, "--json", help=JSON_HELP),
+):
+    """Pull queued requests out of the queue without cancelling them.
+
+    Nothing else picks a paused request back up - not `sf run`, not `sf daemon`. `sf run
+    <id>` resumes it, the same way it unparks a `needs_human` request.
+    """
+    backend, _settings = _open(ctx)
+    paused, bad = [], False
+    for item_id in ids:
+        try:
+            item = backend.load(item_id)
+        except FileNotFoundError:
+            _skip(MISSING % escape(item_id))
+            bad = True
+            continue
+        if item["status"] != "queued":
+            _skip("%s is %s, not queued" % (escape(item_id), item["status"]))
+            bad = True
+            continue
+        item["status"] = "paused"
+        item["reason"] = "paused %s" % now()
+        backend.save(item)
+        paused.append({"id": item["id"], "status": "paused"})
+    _report(paused, json_)
+    if bad:
+        raise typer.Exit(1)
+
+
+@app.command()
+def reset(
+    ctx: typer.Context,
+    ids: List[str] = typer.Argument(..., help=ID_HELP),
+    yes: bool = typer.Option(False, "--yes", "-y", help="do not ask"),
+    json_: bool = typer.Option(False, "--json", help=JSON_HELP),
+):
+    """Take requests back to the start of their pipeline, to be worked from scratch.
+
+    Stage goes back to the pipeline's declared `start`, passes back to zero, and the notes
+    are emptied - every `--note` a human gave and every rework note the line wrote is
+    dropped. That is the point: a reset request carries no leftover instructions into its
+    first stage. It is queued again, so `sf run` picks it up.
+
+    What it deliberately keeps: `history`, so `sf replay <id>` and the accumulated cost
+    still read back the whole life of the request - a reset is a restart, not an amnesia.
+    The worktree and the `sf/<id>` branch stay exactly as they are too; dropping those is
+    what `sf delete` is for.
+    """
+    backend, settings = _open(ctx)
+    _confirm("reset %d request(s) to the start, dropping their notes?" % len(ids), yes)
+    # _skip(), not fail(): one bad id must not hide the ids after it.
+    cache: dict[str, Any] = {}  # one pipeline read per pipeline, for this reset only
+    done, bad = [], False
+    for item_id in ids:
+        try:
+            item = backend.load(item_id)
+        except FileNotFoundError:
+            _skip(MISSING % escape(item_id))
+            bad = True
+            continue
+        if item["status"] == "running":
+            # A running step writes the item back when it finishes, at the stage it was
+            # working - which would undo the reset under the engine's feet.
+            _skip("%s is running; `sf cancel %s` first" % (escape(item_id), escape(item_id)))
+            bad = True
+            continue
+        pipe = _pipeline_of(item, settings, cache)
+        if pipe is None:
+            # A moved repo or a broken YAML is a message, not a traceback: the start
+            # stage is only knowable from the pipeline itself.
+            _skip("%s: pipeline '%s' cannot be read - has the repo moved?"
+                  % (escape(item_id), escape(item["pipeline"])))
+            bad = True
+            continue
+        item["stage"] = pipe.start
+        item["passes"] = 0
+        item["notes"] = []
+        item["status"] = "queued"
+        item["reason"] = "reset %s" % now()
+        item.pop("ended", None)  # live again: an end time would outlive what ended
+        backend.save(item)
+        done.append({"id": item["id"], "status": "queued", "stage": item["stage"]})
+    _report(done, json_)
+    if bad:
+        raise typer.Exit(1)
+
+
+@app.command()
 def doctor(ctx: typer.Context, json_: bool = typer.Option(False, "--json", help=JSON_HELP)):
     """Check this installation: the tools, the token, the paths, the pipelines.
 
@@ -1185,6 +1740,7 @@ def doctor(ctx: typer.Context, json_: bool = typer.Option(False, "--json", help=
     known = _known(settings["pipelines"])
     # No pipeline means nothing can be worked, so this is still essential - but the fix is
     # "write one", not "repair your install". None ship: the process is the user's.
+    # Which ones load, and how many steps each has, is `sf pipelines`' job, not this line's.
     check("pipelines", "%d in %s" % (len(known), settings["pipelines"]),
           "" if known else "none yet - write %s/pipelines/<name>.yaml in a "
                            "repo (it wins), or one here for every repo." % pl.REPO_DIR)
@@ -1192,16 +1748,9 @@ def doctor(ctx: typer.Context, json_: bool = typer.Option(False, "--json", help=
     for k in known:
         try:
             pipe = pl.load(settings["pipelines"], k["name"])
-        except Exception as e:  # whatever a half-written YAML raises is the finding
-            # A pipeline in the installation-wide directory was almost certainly seeded by
-            # `sf init`, which never overwrites - so a stale one from an older version sits
-            # there failing to load forever, and re-seeding is the remedy, not hand-editing.
-            check(k["name"], "does not load: %s" % e,
-                  "`sf init --force` re-seeds the shipped pipelines over it, or edit/remove "
-                  "%s" % (Path(settings["pipelines"]) / ("%s.yaml" % k["name"])))
+        except Exception:  # `sf pipelines` reports what a half-written YAML raises
             continue
         judged = judged or any(pipe.kind(stage) == "judge" for stage in pipe.steps)
-        check(k["name"], "v%s, %d step(s), loads" % (pipe.version, len(pipe.steps)))
 
     # Only when this installation would actually ask: a key nobody needs is not a problem.
     # A judged pipeline merely sitting in the directory is not essential either - it is
@@ -1271,17 +1820,36 @@ def main(argv=None):
     return 0
 
 
+def _running_pid(workspace):
+    """The pid of the step in flight, or None - finished, or nothing ever started.
+
+    Local-only, like `_kill_step` below: the pid file lives on whatever machine ran the
+    step, which today is always this one.
+    """
+    try:
+        return int((Path(workspace) / steps.SCRATCH / steps.PID_FILE).read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def _elapsed(started):
+    """Seconds since a `now()` timestamp - `calendar.timegm` undoes its own `gmtime`."""
+    return time.time() - calendar.timegm(time.strptime(started, "%Y-%m-%dT%H:%M:%SZ"))
+
+
 def _kill_step(workspace):
     """SIGTERM the running step's process group - `claude` and everything it spawned.
 
     ponytail: no SIGKILL escalation. A step that ignores SIGTERM still has the engine's
     step timeout above it, and the item is already cancelled on disk either way.
     """
+    pid = _running_pid(workspace)
+    if pid is None:
+        return  # no step in flight, or it finished between the save and here
     try:
-        pid = int((Path(workspace) / steps.SCRATCH / steps.PID_FILE).read_text())
         os.killpg(pid, signal.SIGTERM)
-    except (OSError, ValueError):
-        pass  # no step in flight, or it finished between the save and here
+    except OSError:
+        pass
 
 
 if __name__ == "__main__":

@@ -6,24 +6,62 @@ All notable changes to this project are documented here. The format is
 
 ## [Unreleased]
 
+### Added
+- Qualified pipeline names: `--pipeline local:<name>` / `global:<name>` pick a tier when a
+  name exists in both; a bare name still tries repo then global. Recorded on the request,
+  so `sf status` and the run agree on which file it means.
+- `sf pipelines`: every pipeline the factory can see, both tiers, marking which name
+  shadows which. Default is one line each; `-d`/`--detailed` adds version and description.
+- `sf reset <ids>`: send a request back to its pipeline's `start` to rework it from
+  scratch — passes and notes cleared, history and worktree kept. Refuses a `running`
+  request; asks `y/N` first (`--yes` to skip).
+- `sf status --monitor` / `-m`: redraws the table in place once a second until Ctrl-C,
+  with a heartbeat pulse. Needs a terminal; refuses `--json`.
+- `sf daemon start`: a background engine that works the queue as requests land, polling
+  every `--interval` seconds under `sf run`'s concurrency quota. `sf daemon status` /
+  `stop` manage it. Pairs with `sf submit --paused`, which keeps a request out of its way
+  until `sf run <id>` starts it.
+- `docs/pipeline-schema.yaml`'s `$id` is now its published raw GitHub URL, so any pipeline
+  file - in this repo or any other - can point a `# yaml-language-server: $schema=` comment
+  at it directly, not only at a relative path that only resolves inside this checkout.
+- `sf show` and `sf replay` now say what a running request is actually doing: which step,
+  since when, and under which pid, instead of the step being invisible until it lands in
+  history. `sf replay <id> --step N` on the step in flight reports the same rather than
+  "no step N" - artifacts land once it finishes, so those still wait.
+
+### Changed
+- The STAGE column now draws as a bar in every human view — `code ███░░░░░ 2/5`. `--json`
+  keeps the bare `code 2/5`, since that field is something a script reads.
+- `sf status` / `--json` always prefixes the PIPELINE column with `local:` or `global:`,
+  even for a request that named the pipeline bare - which file it actually resolved to,
+  not just which tier it was asked for.
+- `sf run` now starts an engine in the background and returns at once by default, the same
+  shape `sf daemon` already has; `--wait` is the opt-in form that blocks until the queue is
+  worked (what gates CI). Replaces `--detach`, which was the opt-in the other way round.
+
+### Fixed
+- Unparking a request (`sf run <id>`, e.g. after `sf pause`) could run it immediately even
+  with every worker already spent elsewhere - a daemon, or a second `sf run` - blowing past
+  the configured `concurrency`. It now goes back to `queued` and waits its turn like
+  anything else in the line.
+- A `paused` request's STAGE bar read as fully worked (`a ████████ 1/1`) though it had
+  never run - the bar only knew `queued` meant "not yet", so anything else, `paused`
+  included, read as "already past this stage". It now reads `0/1`, same as `queued`.
+- Same bug, `running` this time: `sf show` on a request whose first (of two) step was
+  still in flight read `stage: code 1/2` - "behind the request" - right next to a
+  `running: step 1: code ... elapsed: 17s` line saying that exact step had not finished.
+  A step in progress is not behind the request either; it reads `0/2` now, coherent with
+  the `running:` line under it.
+
 ## [0.0.2] - 2026-09-21
 
-The same build as 0.0.2rc1 - see that entry for what it contains - published to
-PyPI rather than TestPyPI.
+Promoted 0.0.2rc1 to 0.0.2
 
 ## [0.0.2rc1] - 2026-09-21
 
 ### Changed
 - `sf submit` takes the request as `--description "<request>"` rather than as a bare
   argument; `--file` is unchanged. A loose word on the command line is now a usage error.
-
-### Fixed
-- Help text, option help and comments called the executable `factory`; it has been `sf`
-  since 0.0.1. Every command reference now names `sf`, as does the `sf/<id>` worktree
-  branch the docs describe.
-- `test_worktree_survives_a_reused_branch_name` pre-created a `factory/1` branch, so the
-  name it was meant to collide with was never the one `workspace()` creates. It now
-  creates `sf/1`, which is the collision the test claims to cover.
 
 ## [0.0.1rc1] - 2026-09-21
 

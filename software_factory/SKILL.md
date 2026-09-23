@@ -28,16 +28,20 @@ daemon serves every image. Requests outlive your shell: submit here, ask from an
 
 | Command | What it does |
 |---|---|
-| `sf submit --description "<request>" --name <label>` | queue a request; prints its id. `--file <path>` (`-` for stdin) for a long request, `--pipeline <name>`, `--repo <path>`, `--run` to work it immediately |
-| `sf run` | work the queue, **blocking until it is done**. `--detach` leaves an engine working in the background instead, `--repo` limits to this repo, `<ids>` to only these, `--concurrency N` |
-| `sf` / `sf status` | every request across every repo — the `docker ps` of the factory: one line per request, a table you can `| grep`. `-d`/`--detailed` is the fuller block form, with each request's text |
+| `sf submit --description "<request>" --name <label>` | queue a request; prints its id. `--file <path>` (`-` for stdin) for a long request, `--pipeline <name>` (`local:<name>` / `global:<name>` when the same name exists in both tiers), `--repo <path>`, `--run` to work it immediately, `--paused` to queue it without letting `sf run`/`sf daemon` pick it up yet |
+| `sf run` | work the queue: **starts an engine in the background and returns at once**. `--wait` blocks until it is done instead, `--repo` limits to this repo, `<ids>` to only these, `--concurrency N` |
+| `sf pause <ids>` | pull queued requests back out of the queue without cancelling them; `sf run <id>` resumes one, same as unparking `needs_human` - it goes back to `queued` and is worked when a slot is free, never past the configured concurrency |
+| `sf daemon start` | leave an engine running that keeps working the queue as requests land, polling every `--interval` seconds (default 5) under the same `--concurrency` quota `sf run` uses. `sf daemon status` / `sf daemon stop` |
+| `sf` / `sf status` | every request across every repo — the `docker ps` of the factory: one line per request, a table you can `| grep`. `-d`/`--detailed` is the fuller block form, with each request's text. `-m`/`--monitor` keeps the table on screen and refreshes it once a second until Ctrl-C — a terminal only, so never yours: poll `sf status` instead |
 | any command | **you get JSON**: output is JSON whenever stdout is not a terminal, which it never is for you. `--json` says so explicitly; `SF_OUTPUT=human` gets the text form |
-| `sf show <id>` | the raw item JSON (pipe to `jq`) |
-| `sf replay <id>` | play the run back: every step, its route, cost, artifacts. `--step N` opens one up, `--artifact <name>` picks one out, `--json` is the flattened timeline |
+| `sf show <id>` | the raw item JSON (pipe to `jq`). `running`: while a step is in flight, its stage, pid and elapsed time |
+| `sf replay <id>` | play the run back: every step, its route, cost, artifacts. `--step N` opens one up, `--artifact <name>` picks one out, `--json` is the flattened timeline. A step still in flight shows too - pid and elapsed, not artifacts yet - `--step N` on it says so instead of "no step N" |
+| `sf pipelines` | every pipeline the factory can see: one padded line each — name, file, flavor. Says which file a bare `--pipeline <name>` reaches when the name is in both tiers. `-d`/`--detailed` is a block per pipeline with its path and description |
 | `sf runners` | every runner a step can `uses:`, whether its binary is on PATH, and what it supports |
 | `sf run <id> --note "..."` | answer a parked request; resumes from `item.stage` with your note in context |
 | `sf run <id> --stage <stage> --note "..."` | reject: re-enter at an earlier stage |
 | `sf cancel <ids>` | stop them now; `sf run <id>` picks one back up. Asks `y/N` first, `--yes` to skip |
+| `sf reset <ids>` | take them back to the start of their pipeline and work them from scratch: stage back to the pipeline's `start`, passes back to zero, notes emptied, queued again. `history` stays, so `sf replay` still reads the whole life of the request, and so do the worktree and the `sf/<id>` branch. A `done` request resets; a `running` one is refused. Asks `y/N` first, `--yes` to skip |
 | `sf delete <ids>` | drop the items, their artifacts and their worktrees. `--force` if one is running. Asks `y/N` first, `--yes` to skip |
 | `sf prune` | housekeeping: delete finished requests in bulk — every `done` one by default. `--status <s>` repeatable (`failed`, `cancelled`, `queued`, `needs_human`), `--repo`, `--older-than 7d`, `--dry-run` to see what would go, `--yes` to skip the `y/N` confirmation. Never touches a `running` request, and takes each one's `sf/<id>` branch with it |
 | `sf doctor` | one line per check of this installation: git, the `claude` CLI and its token, `SF_HOME`, the pipelines. Exits non-zero if something essential is missing — run it when a command behaves oddly |
@@ -51,12 +55,15 @@ daemon serves every image. Requests outlive your shell: submit here, ask from an
    in its own worktree — `<worktrees>/<repo name>/<id>`, `~/.sf/worktrees/...` by default,
    and printed as `.workspace` by `sf show <id>`. Not in the repo you submitted from.
 
-`sf run` **blocks** until the queue is worked, exiting non-zero when nothing reached
-`done` — so its exit code is a real answer and can gate CI. `--detach` is the opt-in form
-that returns at once: after that one its exit code says only that the engine started, so
-poll `sf` rather than reporting anything as done.
+`sf run` **returns at once**: it starts an engine in the background and its exit code says
+only that something started, so poll `sf` rather than reporting anything as done. `--wait`
+is the opt-in form that blocks until the queue is worked, exiting non-zero when nothing
+reached `done` — that is what gates CI, not the default.
 
 `sf run <id>` is also the recovery path for a request left `running` by a killed engine.
+Unparking never exceeds the concurrency quota: if every slot is already spent - another
+`sf run`, or the daemon - the request goes back to `queued` and waits its turn instead of
+running anyway.
 
 ## When a request is parked (`needs_human`)
 
@@ -114,9 +121,11 @@ restate it, and must not tell the agent to end its reply with anything else.
 and that is the whole search path - nothing ships. A step says who performs it
 (`uses:`) and what to hand them (`with:`).
 
-Shipped: `dev` (plan, code, test, review, commit), `quick` (code, commit — no plan, no
-tests, no review) for requests small enough to state exactly (`--pipeline quick`), and
-`judged` (a `uses: typesafe` gate in front of the reviewer; needs `TYPESAFE_API_KEY`).
+`sf pipelines` is what is actually on disk in both tiers. When a name exists in both, a
+bare `--pipeline dev` is the repo's own; `--pipeline local:dev` and `--pipeline global:dev`
+name one tier each, and the qualifier is kept on the request, so `sf status` shows
+`local:dev` and the run resolves the same file. `local:` on a request with no repo is an
+error, never a quiet fall back to the global file.
 
 ```yaml
 name: dev

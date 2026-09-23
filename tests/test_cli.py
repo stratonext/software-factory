@@ -139,6 +139,27 @@ def test_submit_run_queues_and_works_it_in_one_command(installation, tmp_path, m
     assert out.count("id: 1") == 2, "the id line, then the run result line"
 
 
+def test_submit_paused_stays_out_of_the_queue(installation, tmp_path, monkeypatch, capsys):
+    from software_factory.__main__ import _bar
+
+    repo = a_repo(tmp_path / "myproject")  # one step, "a"
+    monkeypatch.chdir(repo)
+    assert main(["submit", "--description", "a thing", "--name", "a-thing", "--paused"]) == 0
+    item_id = _id(capsys)
+
+    backend = LocalBackend(installation / "state", installation / "worktrees")
+    assert backend.load(item_id)["status"] == "paused"
+    assert engine.queued(backend) == [], "a paused request is not queued"
+
+    capsys.readouterr()
+    main(["status"])
+    assert "a %s0/1" % _bar(0, 1) in capsys.readouterr().out, \
+        "paused is held back, not worked - same 0/1 a queued request reads"
+
+    assert main(["submit", "--description", "x", "--name", "x", "--paused", "--run"]) == 1
+    assert "contradict" in capsys.readouterr().err
+
+
 def test_submit_refuses_an_overlong_name(installation, tmp_path, monkeypatch, capsys):
     """A name is a label for one status column, not a second request."""
     monkeypatch.chdir(a_repo(tmp_path / "myproject"))
@@ -185,24 +206,27 @@ def test_status_lists_every_repo_in_flight(installation, tmp_path, monkeypatch, 
 
 
 def test_status_shows_the_stage_position_in_the_pipeline(installation, tmp_path, monkeypatch, capsys):
-    """`a 1/1` - which stage, and how far through the pipeline that is."""
+    """`a ░░░░░░░░ 0/1` - which stage, how far through the pipeline, and that drawn."""
+    from software_factory.__main__ import _bar
+
     repo = a_repo(tmp_path / "myproject")  # one step, "a"
     monkeypatch.chdir(repo)
     main(["submit", "--description", "a thing", "--name", "a-thing"])
     capsys.readouterr()
 
     main([])
-    assert "a 0/1" in capsys.readouterr().out, "queued: it has not worked that stage yet"
+    out = capsys.readouterr().out
+    assert "a %s0/1" % _bar(0, 1) in out, "queued: it has not worked that stage yet"
 
-    main(["run", "1"])
+    main(["run", "1", "--wait"])
     capsys.readouterr()
     main([])
-    assert "done 1/1" in capsys.readouterr().out, "done is not a step, so it reads N/N"
+    assert "done %s1/1" % _bar(1, 1) in capsys.readouterr().out, "done is not a step, so N/N"
 
     (repo / ".sf" / "pipelines" / "dev.yaml").unlink()  # pipeline gone: still lists, bare stage
     main([])
     out = capsys.readouterr().out
-    assert "done" in out and "done 1/1" not in out
+    assert "done" in out and "1/1" not in out, "no rank to draw, so neither bar nor counter"
 
 
 def test_worktrees_are_centralised_by_repo(installation, tmp_path, monkeypatch, capsys):
@@ -301,8 +325,8 @@ def test_run_returns_before_the_work_is_finished(installation, tmp_path, monkeyp
     item_id = _id(capsys)
 
     started = time.monotonic()
-    assert main(["run", "--detach"]) == 0
-    assert time.monotonic() - started < 1.5, "run --detach blocked on the pipeline"
+    assert main(["run"]) == 0
+    assert time.monotonic() - started < 1.5, "run blocked on the pipeline"
     assert "id: %s  status: started" % item_id in capsys.readouterr().out
 
     backend = LocalBackend(installation / "state", installation / "worktrees")
@@ -314,13 +338,60 @@ def test_run_returns_before_the_work_is_finished(installation, tmp_path, monkeyp
     assert (installation / "state" / "run.log").exists()
 
 
+def test_daemon_picks_up_a_request_and_can_be_stopped(installation, tmp_path, monkeypatch, capsys):
+    """The daemon is a poll loop: nobody types `sf run` for it to pick a request up."""
+    repo = a_repo(tmp_path / "watched")
+    monkeypatch.chdir(repo)
+
+    started = time.monotonic()
+    assert main(["daemon", "start", "--interval", "1"]) == 0
+    assert time.monotonic() - started < 1.5, "daemon start blocked on the poll loop"
+    capsys.readouterr()
+
+    deadline = time.monotonic() + 10
+    status = {"running": False}
+    while not status["running"]:
+        assert time.monotonic() < deadline, "the daemon never wrote its pidfile"
+        main(["daemon", "status", "--json"])
+        status = json.loads(capsys.readouterr().out)
+        if not status["running"]:
+            time.sleep(0.1)
+    assert status["pid"]
+    assert (installation / "state" / "daemon.log").exists()
+
+    main(["submit", "--description", "watched work", "--name", "watched"])
+    item_id = _id(capsys)
+
+    backend = LocalBackend(installation / "state", installation / "worktrees")
+    deadline = time.monotonic() + 60
+    while backend.load(item_id)["status"] in ("queued", "running"):
+        assert time.monotonic() < deadline, "the daemon never picked it up"
+        time.sleep(0.2)
+    assert backend.load(item_id)["status"] == "done"
+
+    assert main(["daemon", "start", "--interval", "1"]) == 1, "already running - refused"
+    capsys.readouterr()
+
+    assert main(["daemon", "stop"]) == 0
+    capsys.readouterr()
+    deadline = time.monotonic() + 10
+    while True:
+        main(["daemon", "status", "--json"])
+        if not json.loads(capsys.readouterr().out)["running"]:
+            break
+        assert time.monotonic() < deadline, "daemon never stopped"
+        time.sleep(0.2)
+
+    assert main(["daemon", "stop"]) == 1, "already stopped"
+
+
 def test_run_waits_when_asked(installation, tmp_path, monkeypatch, capsys):
     repo = a_repo(tmp_path / "quick")
     monkeypatch.chdir(repo)
     main(["submit", "--description", "quick work", "--name", "quick-work"])
     item_id = _id(capsys)
 
-    assert main(["run"]) == 0
+    assert main(["run", "--wait"]) == 0
     backend = LocalBackend(installation / "state", installation / "worktrees")
     assert backend.load(item_id)["status"] == "done", "a blocking run needs no polling"
 
@@ -336,10 +407,10 @@ def test_run_with_an_id_unparks_a_request_and_works_it(installation, tmp_path, m
     item_id = _id(capsys)
     backend = LocalBackend(installation / "state", installation / "worktrees")
 
-    main(["run", item_id])
+    main(["run", item_id, "--wait"])
     assert backend.load(item_id)["status"] == "needs_human"
 
-    assert main(["run", item_id, "--note", "the users table"]) == 0
+    assert main(["run", item_id, "--note", "the users table", "--wait"]) == 0
     item = backend.load(item_id)
     assert item["status"] == "done", "unparked and worked in the same call"
     assert item["passes"] == 1, "a human unblocking an agent is not a rework pass"
@@ -381,6 +452,44 @@ def test_cancel_kills_the_running_step(tmp_path):
     assert item["status"] == "cancelled", item
     assert item["reason"].startswith("cancelled ")
     assert not pid_file.exists(), "the pid file outlived the step"
+
+
+def test_show_and_replay_report_a_step_in_flight(tmp_path, capsys):
+    """A running step is not a black box until it finishes: `sf show` and `sf replay`
+    both have to say what is running, since when, and under which pid - not just that
+    the request is `running`, and not nothing at all until history has an entry for it."""
+    backend, pipelines = build(tmp_path, steps={"a": sh("sleep 30", next="done")})
+    backend.create("r", "t", "a")
+    walker = threading.Thread(target=engine.run, args=(backend, pipelines), daemon=True)
+    walker.start()
+    pid = int(_await_step(tmp_path, "1").read_text())
+
+    cli = ["--backend", str(tmp_path / "state"), "--worktrees", str(tmp_path / "worktrees"),
+           "--pipelines", pipelines]
+    try:
+        capsys.readouterr()
+        assert main(cli + ["show", "1"]) == 0
+        out = capsys.readouterr().out
+        assert "running: step 1: a (command)" in out and "pid: %d" % pid in out
+        assert "stage: a " in out and "a 1/1" not in out, \
+            "in flight is not behind the request yet - same 0/1 a queued request reads"
+
+        capsys.readouterr()
+        assert main(cli + ["replay", "1"]) == 0
+        out = capsys.readouterr().out
+        assert "#1" in out and "running" in out and "pid %d" % pid in out
+        assert "a  [running]" in out, "the route line says something has started too"
+
+        capsys.readouterr()
+        assert main(cli + ["replay", "1", "--step", "1"]) == 0
+        out = capsys.readouterr().out
+        assert "still running" in out and "pid: %d" % pid in out
+
+        assert main(cli + ["replay", "1", "--step", "1", "--artifact", "output.txt"]) == 1
+        assert "still running" in capsys.readouterr().err
+    finally:
+        main(cli + ["cancel", "1"])
+        walker.join(timeout=10)
 
 
 def test_cancel_reaches_an_item_waiting_in_the_backlog(tmp_path):
@@ -446,8 +555,101 @@ def test_a_cancelled_request_is_resumable(tmp_path):
     assert drain(backend, pipelines)[0]["status"] == "cancelled", "cancelled is not queued"
 
     main(["--backend", str(tmp_path / "state"), "--pipelines", pipelines,
-          "--worktrees", str(tmp_path / "worktrees"), "run", "1"])
+          "--worktrees", str(tmp_path / "worktrees"), "run", "1", "--wait"])
     assert backend.load("1")["status"] == "done", "`run <id>` picks a cancelled request back up"
+
+
+def test_pause_pulls_a_queued_request_out_and_run_resumes_it(tmp_path):
+    backend, pipelines = build(tmp_path, steps={"a": sh("true", next="done")})
+    backend.create("r", "t", "a")
+    assert main(["--backend", str(tmp_path / "state"), "pause", "1"]) == 0
+    assert backend.load("1")["status"] == "paused"
+    assert engine.queued(backend) == [], "a paused request is not queued"
+
+    main(["--backend", str(tmp_path / "state"), "--pipelines", pipelines, "run", "1", "--wait"])
+    assert backend.load("1")["status"] == "done", "`run <id>` resumes a paused request"
+
+
+def test_run_id_leaves_a_paused_request_queued_when_at_capacity(tmp_path):
+    """Unparking must not borrow a slot beyond the quota: with every worker already
+    `running`, `run <id>` puts a paused request back in the queue and stops there,
+    for whichever engine polls next - it does not force it through regardless."""
+    backend, pipelines = build(tmp_path, steps={"a": sh("true", next="done")})
+    backend.create("busy", "t", "a")
+    backend.claim(backend.load("1"))  # simulates a slot already spent elsewhere
+    backend.create("waiting", "t", "a")
+    assert main(["--backend", str(tmp_path / "state"), "pause", "2"]) == 0
+
+    main(["--backend", str(tmp_path / "state"), "--pipelines", pipelines,
+          "run", "2", "--wait", "--concurrency", "1"])
+    assert backend.load("2")["status"] == "queued", "the running item ate the only slot"
+    assert backend.load("1")["status"] == "running", "untouched by the other request's run"
+
+
+def test_pause_refuses_a_non_queued_request(tmp_path):
+    backend, pipelines = build(tmp_path, steps={"a": sh("true", next="done")})
+    backend.create("r", "t", "a")
+    assert drain(backend, pipelines)[0]["status"] == "done"
+    assert main(["--backend", str(tmp_path / "state"), "pause", "1"]) == 1
+    assert backend.load("1")["status"] == "done"
+
+
+def test_reset_takes_a_finished_request_back_to_the_start(tmp_path):
+    """A done request comes back as new work - minus its notes, keeping its history."""
+    backend, pipelines = build(
+        tmp_path,
+        start="a",
+        steps={"a": sh("true", next="b"), "b": sh("true", next="done")},
+    )
+    backend.create("r", "t", "a")
+    assert drain(backend, pipelines)[0]["status"] == "done"
+    ran = backend.load("1")
+    ran["notes"] = [{"stage": "human", "text": "also do the other thing"}]
+    ran["passes"] = 3
+    backend.save(ran)
+
+    cli = ["--backend", str(tmp_path / "state"), "--pipelines", pipelines]
+    assert main(cli + ["reset", "1", "--yes"]) == 0
+
+    item = backend.load("1")
+    assert item["stage"] == "a", "back at the pipeline's declared start"
+    assert item["passes"] == 0
+    assert item["notes"] == [], "a reset request carries no leftover instructions"
+    assert item["status"] == "queued"
+    assert item["reason"].startswith("reset ")
+    assert "ended" not in item, "it is live again"
+    assert item["history"] == ran["history"] and item["history"], "`sf replay` still reads it"
+
+
+def test_reset_refuses_a_running_request(tmp_path):
+    backend, pipelines = build(tmp_path, steps={"a": sh("sleep 30", next="done")})
+    backend.create("r", "t", "a")
+    walker = threading.Thread(target=engine.run, args=(backend, pipelines), daemon=True)
+    walker.start()
+    _await_step(tmp_path, "1")
+
+    cli = ["--backend", str(tmp_path / "state"), "--worktrees", str(tmp_path / "worktrees"),
+           "--pipelines", pipelines]
+    assert main(cli + ["reset", "1", "--yes"]) == 1
+    assert backend.load("1")["status"] == "running", "not reset under the engine's feet"
+
+    assert main(cli + ["cancel", "1", "--yes"]) == 0
+    walker.join(timeout=10)
+
+
+def test_reset_asks_before_dropping_the_notes(tmp_path, monkeypatch):
+    """`--yes` skips the y/N gate; without it, anything but y is No."""
+    backend, pipelines = build(tmp_path, steps={"a": sh("true", next="done")})
+    backend.create("r", "t", "a")
+    cli = ["--backend", str(tmp_path / "state"), "--pipelines", pipelines]
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "")
+    assert main(cli + ["reset", "1"]) == 1, "a bare Enter is No"
+    assert backend.load("1")["passes"] == 1, "nothing was touched"
+
+    assert main(cli + ["reset", "1", "--yes"]) == 0, "--yes never reaches the prompt"
+    assert backend.load("1")["passes"] == 0
 
 
 def test_the_cli_surface_survives(installation, tmp_path, monkeypatch, capsys):
@@ -456,7 +658,7 @@ def test_the_cli_surface_survives(installation, tmp_path, monkeypatch, capsys):
     main(["submit", "--description", "one thing", "--name", "one-thing"])
     capsys.readouterr()
 
-    assert main(["run", "--repo"]) == 0, "`--repo` with no value still means 'here'"
+    assert main(["run", "--repo", "--wait"]) == 0, "`--repo` with no value still means 'here'"
     assert "id: 1" in capsys.readouterr().out
 
     assert main(["--help"]) == 0, "help prints and returns, it does not exit the process"
@@ -504,7 +706,7 @@ def test_status_shows_every_version_a_request_ran_under(installation, tmp_path, 
     main(["status"])
     assert "dev@" not in capsys.readouterr().out, "nothing has run yet: no version to show"
 
-    main(["run"])
+    main(["run", "--wait"])
     assert [h["version"] for h in backend.load("1")["history"]] == [1, 1]
     capsys.readouterr()
     main(["status"])
@@ -512,7 +714,7 @@ def test_status_shows_every_version_a_request_ran_under(installation, tmp_path, 
 
     # Edit the pipeline, then re-enter the finished request at its second stage.
     definition.write_text(definition.read_text().replace("version: 1", "version: 2"))
-    main(["run", "1", "--stage", "b"])
+    main(["run", "1", "--stage", "b", "--wait"])
     assert [h["version"] for h in backend.load("1")["history"]] == [1, 1, 2]
     capsys.readouterr()
     main(["status"])
@@ -624,7 +826,7 @@ def test_a_promoted_setting_reaches_the_step_it_caps(installation, tmp_path, mon
     (installation / "config.yaml").write_text("step_timeout: 1\n")
     monkeypatch.chdir(repo)
     main(["submit", "--description", "sit there", "--name", "slow"])
-    main(["run", "1"])
+    main(["run", "1", "--wait"])
     capsys.readouterr()
 
     item = LocalBackend(installation / "state", installation / "worktrees").load("1")
@@ -764,8 +966,8 @@ def test_run_wait_exits_non_zero_when_nothing_reached_done(installation, tmp_pat
     monkeypatch.chdir(repo)
     main(["submit", "--description", "will not pass", "--name", "nope"])
 
-    assert main(["run"]) == 1, "it parked; nothing reached done"
-    assert main(["run"]) == 0, "an empty queue is not a failure"
+    assert main(["run", "--wait"]) == 1, "it parked; nothing reached done"
+    assert main(["run", "--wait"]) == 0, "an empty queue is not a failure"
 
 
 
@@ -773,7 +975,7 @@ def test_replay_says_no_instead_of_quietly_doing_something_else(installation, tm
     """--artifact without --step was ignored, and --step 0 fell through to the whole run."""
     monkeypatch.chdir(a_repo(tmp_path / "myproject"))
     main(["submit", "--description", "one thing", "--name", "one-thing"])
-    main(["run"])
+    main(["run", "--wait"])
     capsys.readouterr()
 
     assert main(["replay", "1", "--artifact", "output.txt"]) == 1
@@ -804,8 +1006,13 @@ def test_doctor_names_what_is_missing_and_exits_non_zero(installation, tmp_path,
     ))
     assert main(["doctor", "--pipelines", str(judging)]) == 1
     report = capsys.readouterr().out
-    assert "j: v1, 1 step(s), loads" in report, "and which pipelines resolve"
+    assert "1 in %s" % judging in report, "just the count and the default path"
+    assert "j: v1, 1 step(s), loads" not in report, "which pipelines resolve is `sf pipelines`'s job"
     assert "TYPESAFE_API_KEY" in report, "asked for once a pipeline judges"
+
+    assert main(["pipelines", "--pipelines", str(judging)]) == 0
+    report = capsys.readouterr().out
+    assert "1 step(s)" in report, "sf pipelines says whether each one is valid, and its step count"
 
 
 def test_an_unreadable_config_is_an_error_message_not_a_traceback(installation, capsys):
@@ -862,3 +1069,189 @@ def test_destructive_commands_ask_before_they_act(installation, tmp_path, monkey
     main(["submit", "--description", "scripted", "--name", "scripted"])  # piped: nobody to ask
     capsys.readouterr()
     assert main(["delete", "4"]) == 0, "automation is not blocked by a prompt"
+
+
+def test_monitor_needs_a_terminal_and_a_table(installation, tmp_path, monkeypatch, capsys):
+    """`-m` redraws a table in place: there is nothing to redraw in a pipe, or in JSON."""
+    monkeypatch.chdir(a_repo(tmp_path / "myproject"))
+    main(["submit", "--description", "one thing", "--name", "one-thing"])
+    capsys.readouterr()
+
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True, raising=False)
+    assert main(["status", "--monitor", "--json"]) == 1
+    assert "--monitor" in capsys.readouterr().err, "a message, not a traceback"
+
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False, raising=False)
+    assert main(["status", "-m"]) == 1
+    assert "terminal" in capsys.readouterr().err
+
+
+def test_monitor_draws_the_stage_as_a_bar(installation, tmp_path, monkeypatch, capsys):
+    """One source of truth: the bar is the rank and total `_stage_label` already computed."""
+    from rich.text import Text
+
+    from software_factory.__main__ import BAR_DONE, BAR_LEFT, STAGE_CELLS, _bar, _frame
+
+    assert Text(BAR_DONE).cell_len == Text(BAR_LEFT).cell_len == 1, \
+        "one terminal cell each, or the table's len() padding is a lie"
+    assert _bar(2, 5) == BAR_DONE * 4 + BAR_LEFT * 4 + " ", "2 of 5, rounded up onto 8 cells"
+    assert _bar(0, 5) == BAR_LEFT * STAGE_CELLS + " ", "queued: nothing behind it yet"
+    assert _bar(5, 5) == BAR_DONE * STAGE_CELLS + " ", "only a finished request fills it"
+
+    repo = a_repo(tmp_path / "myproject")  # one step, "a"
+    monkeypatch.chdir(repo)
+    main(["submit", "--description", "a thing", "--name", "a-thing"])
+    # A second repo, whose stage name is longer: the two STAGE cells are different widths.
+    other = a_repo(tmp_path / "other")
+    (other / ".sf" / "pipelines" / "dev.yaml").write_text(yaml.safe_dump(
+        {"name": "dev", "steps": {"implement": sh("true", next="done")}}
+    ))
+    monkeypatch.chdir(other)
+    main(["submit", "--description", "another thing", "--name", "another-thing"])
+    capsys.readouterr()
+    backend = LocalBackend(installation / "state", installation / "worktrees")
+    settings = config.load()
+
+    frame = _frame(backend, settings)
+    lines = frame.plain.splitlines()
+    assert "a %s0/1" % _bar(0, 1) in frame.plain, "the bar sits with the counter it is drawn from"
+    assert len(lines) == 4, "a header, one line per request, and the heartbeat"
+    # The colour goes on the finished text, so no markup ever reaches the padding: the
+    # STATUS column starts at the same offset on every line, whatever the stage is called.
+    assert len({len(line) - len("queued") for line in lines[1:3]}) == 1
+    assert lines[0].index("STATUS") == lines[1].index("queued") == lines[2].index("queued")
+    assert BAR_DONE not in frame.plain, "queued: no cell is lit"
+
+    main(["run", "1", "--wait"])
+    frame = _frame(backend, settings)
+    assert "done %s1/1" % _bar(1, 1) in frame.plain, "re-read every tick"
+    green = [frame.plain[s.start:s.end] for s in frame.spans if str(s.style) == "green"]
+    assert BAR_DONE * STAGE_CELLS in green, "the filled run is green, not the whole bar"
+
+
+def test_the_monitor_beats_while_it_refreshes(installation, tmp_path, monkeypatch, capsys):
+    """The dot pulses off the tick, so it stops moving exactly when the refresh does."""
+    from software_factory.__main__ import LIVE_DOT, _frame
+
+    monkeypatch.chdir(a_repo(tmp_path / "myproject"))
+    main(["submit", "--description", "a thing", "--name", "a-thing"])
+    capsys.readouterr()
+    backend = LocalBackend(installation / "state", installation / "worktrees")
+    settings = config.load()
+
+    def lit(tick):
+        frame = _frame(backend, settings, tick)
+        return [frame.plain[s.start:s.end] for s in frame.spans if str(s.style) == "green"]
+
+    assert LIVE_DOT in lit(0) and LIVE_DOT in lit(2), "lit on the even ticks"
+    assert LIVE_DOT not in lit(1) and LIVE_DOT not in lit(3), "and dim on the odd ones"
+    assert LIVE_DOT in _frame(backend, settings, 1).plain, "dim, not gone - it must not jump"
+
+
+def _global_pipeline(installation, name="dev", description="The installation-wide line.",
+                     step="theirs"):
+    """A pipeline in ~/.sf/pipelines, to sit under (or beside) a repo's own."""
+    where = installation / "pipelines"
+    where.mkdir(parents=True, exist_ok=True)
+    (where / ("%s.yaml" % name)).write_text(yaml.safe_dump(
+        {"name": name, "description": description, "steps": {step: sh("true", next="done")}}
+    ))
+    return where
+
+
+def test_a_qualified_name_says_which_of_two_dev_pipelines_was_meant(
+        installation, tmp_path, monkeypatch, capsys):
+    """The same name in both tiers is the normal case; `local:`/`global:` is how a request
+    stops being ambiguous, and the item keeps the qualifier so the run resolves the same
+    file it was submitted against."""
+    _global_pipeline(installation)
+    repo = a_repo(tmp_path / "myproject")  # its own dev.yaml, one step "a"
+    monkeypatch.chdir(repo)
+    backend = LocalBackend(installation / "state", installation / "worktrees")
+
+    for wanted, stage in (("global:dev", "theirs"), ("local:dev", "a"), ("dev", "a")):
+        main(["submit", "--description", "a thing", "--name", "x", "--pipeline", wanted])
+        item = backend.load(_id(capsys))
+        assert item["pipeline"] == wanted, "the qualifier the user gave, kept"
+        assert item["stage"] == stage, "which is the file it resolved"
+
+    capsys.readouterr()
+    main(["status"])
+    out = capsys.readouterr().out
+    assert "global:dev" in out and "local:dev" in out, "a status row says which file"
+    assert out.count("local:dev") == 2, "the bare `dev` row too - it resolved to the same file"
+
+    # And a qualifier that resolves nowhere names the one tier it searched.
+    assert main(["submit", "--description", "a", "--name", "x", "--pipeline", "local:nope"]) == 1
+    err = capsys.readouterr().err
+    assert "no pipeline 'local:nope'" in err and str(repo / ".sf" / "pipelines") in err
+    assert str(installation / "pipelines") not in err, "local: never falls back to global"
+
+
+def test_status_prefixes_a_bare_name_with_the_tier_it_resolved(
+        installation, tmp_path, monkeypatch, capsys):
+    """No repo has its own copy, so the bare name only ever resolves to the global one -
+    and status has to say so, not just print the bare `dev` a script can't tell apart
+    from a `local:dev` it never asked to qualify."""
+    _global_pipeline(installation)
+    repo = a_repo(tmp_path / "myproject")
+    shutil.rmtree(repo / ".sf")  # no pipeline of its own: `dev` only exists globally
+    monkeypatch.chdir(repo)
+    main(["submit", "--description", "a thing", "--name", "x", "--pipeline", "dev"])
+    backend = LocalBackend(installation / "state", installation / "worktrees")
+    assert backend.load(_id(capsys))["pipeline"] == "dev", "still recorded bare"
+
+    capsys.readouterr()
+    main(["status"])
+    assert "global:dev" in capsys.readouterr().out
+
+
+def test_local_without_a_repo_is_a_message_and_not_a_traceback(
+        installation, tmp_path, monkeypatch, capsys):
+    """An item with no repo has no local tier at all. The engine has to say that and fail
+    the one item, the way it does for any other unreadable pipeline."""
+    _global_pipeline(installation)
+    backend = LocalBackend(installation / "state", installation / "worktrees")
+    backend.create("a thing", "local:dev", "a", repo="", name="x")
+
+    assert main(["run", "1", "--wait"]) == 1
+    assert "no repo" in capsys.readouterr().out
+    assert backend.load("1")["status"] == "failed"
+
+
+def test_pipelines_lists_both_tiers_and_what_shadows_what(
+        installation, tmp_path, monkeypatch, capsys):
+    _global_pipeline(installation)
+    _global_pipeline(installation, name="quick", description="The short line.")
+    repo = a_repo(tmp_path / "myproject")  # its own dev.yaml, which shadows the global one
+    monkeypatch.chdir(repo)
+
+    main(["pipelines"])
+    lines = [row for row in capsys.readouterr().out.splitlines() if row.strip()]
+    assert len(lines) == 3, lines
+    assert [row.split()[2] for row in lines] == ["global", "global", "local"]
+    assert [row.split()[0] for row in lines] == ["dev", "quick", "dev"], "global first, then local"
+    assert str(repo / ".sf" / "pipelines" / "dev.yaml") in lines[-1], "and where it came from"
+    assert all("1 step(s)" in row for row in lines), "and whether it loads, and how many steps"
+
+    main(["pipelines", "--detailed"])
+    out = capsys.readouterr().out
+    assert "global" in out and str(installation / "pipelines") in out
+    assert "local" in out and str(repo / ".sf" / "pipelines") in out
+    assert "The installation-wide line." in out, "the description when the YAML has one"
+    assert "dev v1" in out and "quick v1" in out
+    assert "shadowed by local:dev" in out and "shadows global:dev" in out
+    assert "shadowed by local:quick" not in out, "only a name that is in both tiers"
+
+    main(["pipelines", "--json"])
+    rows = json.loads(capsys.readouterr().out)
+    assert [(r["name"], r["flavor"], r["bare"]) for r in rows] == [
+        ("dev", "global", False), ("quick", "global", True), ("dev", "local", True)
+    ], "`bare` is which row a bare --pipeline name reaches"
+
+    # Outside a repo there is no local tier to head: it says so rather than printing an
+    # empty group.
+    monkeypatch.chdir(tmp_path)
+    main(["pipelines"])
+    out = capsys.readouterr().out
+    assert "not in a git repo" in out and str(repo / ".sf") not in out, "no empty heading"

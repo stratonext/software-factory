@@ -99,7 +99,7 @@ def defaults():
                 "secret": 0.5,
                 "destructive": 0.6,
                 "implements": 0.5,
-                "scope": 1.5,
+                "scope": 0.8,
                 "satisfied": 0.6,
                 "stubbed": 0.6,
             },

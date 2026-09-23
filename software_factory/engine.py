@@ -34,7 +34,9 @@ def run(backend, pipelines_dir, concurrency=None, ids=None, repo=None, default_c
 
     `concurrency` is an explicit `--concurrency` and wins; failing that the pipelines being
     worked say how much parallelism they want, and `default_concurrency` is the configured
-    fallback for the ones that do not.
+    fallback for the ones that do not. Whatever that resolves to, items already `running`
+    elsewhere shrink it first - unparking one more request must not push the installation
+    past the quota it was configured for, so an item this call cannot fit stays `queued`.
     """
     items = queued(backend, ids, repo)
     if not items:
@@ -54,9 +56,20 @@ def run(backend, pipelines_dir, concurrency=None, ids=None, repo=None, default_c
             failed.append(_stop(backend, item, "failed", "pipeline '%s': %s" % (item["pipeline"], e)))
             continue
         work.append(item)
+    if not work:
+        return failed
     workers = concurrency or max(
         (p.concurrency for p in pipes if p.concurrency), default=default_concurrency
     )
+    # Another engine - a daemon, or a second `sf run` unparking one more item - may already
+    # be spending part of this same quota. A snapshot, not a live semaphore: good enough to
+    # stop one call from doubling the concurrency the installation was configured for, not
+    # a guarantee under a race. Zero available slots means every item here stays queued for
+    # whichever engine polls next, rather than borrowing a slot beyond the quota.
+    running = sum(1 for i in backend.all() if i["status"] == "running")
+    workers = max(0, workers - running)
+    if workers == 0:
+        return failed
     # Resolved here rather than deeper down: a step with no timeout at all would wait on a
     # hung `claude` forever, which is not a default anyone asked for.
     step_timeout = STEP_TIMEOUT if step_timeout is None else step_timeout
@@ -109,6 +122,16 @@ def _walk(backend, pipe, item, step_timeout, agent_attempts, retry_wait, max_inp
 
         kind, with_, env = pipe.kind(stage), pipe.options(stage), pipe.environ(stage)
         effort = _effort(item, step, kind)
+        # Recorded before the blocking call, not after: this is what lets `sf show` and
+        # `sf replay` say what is in flight and since when, rather than nothing at all
+        # until the step lands in history. Popped the moment the call returns, a few
+        # lines down, so a finished step is never shadowed by its own stale marker.
+        item["running_step"] = {
+            "step": step_no, "stage": stage, "kind": kind,
+            "label": step.get("name", ""), "uses": pipe.runners[stage]["name"],
+            "started": started,
+        }
+        backend.save(item)
         if kind == "judge":
             # ponytail: dispatched on the kind, not on the runner's name - there is one
             # judge implementation. The day there is a second, the kind gets a name again.
@@ -127,6 +150,7 @@ def _walk(backend, pipe, item, step_timeout, agent_attempts, retry_wait, max_inp
                 agent_attempts, retry_wait,
             )
 
+        item.pop("running_step", None)
         # The step's output becomes a file later steps can declare as their input, and
         # a per-pass artifact, so every revision of a plan or a review stays inspectable.
         if step.get("output"):

@@ -186,3 +186,41 @@ def test_an_empty_installation_says_none_ship(installation):
     empty.mkdir(parents=True)
     with pytest.raises(FileNotFoundError, match="no pipelines anywhere yet"):
         pl.load(pl.search_path(None, empty), "dev")
+
+
+def test_a_qualifier_picks_the_tier_a_bare_name_would_have_chosen_for_you(installation, tmp_path):
+    """`local:dev` and `global:dev` when both exist - the whole reason for the prefix."""
+    mine = installation / "pipelines"
+    mine.mkdir(parents=True)
+    (mine / "dev.yaml").write_text(
+        yaml.safe_dump({"name": "dev", "steps": {"theirs": sh("true", next="done")}})
+    )
+    repo = a_repo(tmp_path / "myproject")  # ships its own dev.yaml with step "a"
+    where = pl.search_path(repo, mine)
+
+    assert list(pl.load(where, "local:dev").steps) == ["a"]
+    assert list(pl.load(where, "global:dev").steps) == ["theirs"]
+    assert list(pl.load(where, "dev").steps) == ["a"], "a bare name still prefers the repo's"
+
+    # A qualifier that resolves nowhere names the one tier it looked in, not both.
+    with pytest.raises(FileNotFoundError, match="no pipeline 'global:quick'") as bad:
+        pl.load(where, "global:quick")
+    assert str(mine) in str(bad.value) and str(pl.repo_pipelines(repo)) not in str(bad.value)
+
+    # Only the two tier words qualify: anything else in front of a colon is a file name.
+    assert pl.split("weird:dev") == (None, "weird:dev")
+    assert pl.qualified("local:dev", "dev") == "local:dev"
+    assert pl.qualified("dev", "dev") == "dev", "items on disk carry a bare name"
+
+
+def test_local_outside_a_repo_says_so_instead_of_searching_the_global_one(installation):
+    """There is no local tier without a repo, and answering with the global file would be
+    the one thing `local:` was typed to prevent."""
+    mine = installation / "pipelines"
+    mine.mkdir(parents=True)
+    (mine / "dev.yaml").write_text(
+        yaml.safe_dump({"name": "dev", "steps": {"theirs": sh("true", next="done")}})
+    )
+    with pytest.raises(FileNotFoundError, match="no pipeline 'local:dev'") as bad:
+        pl.load(pl.search_path(None, mine), "local:dev")
+    assert "no repo" in str(bad.value) and str(mine) not in str(bad.value)

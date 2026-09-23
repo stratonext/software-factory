@@ -75,6 +75,12 @@ Start from [`docs/overview.md`](docs/overview.md) for the model and
 - **Comments explain why, not what.** The existing ones pin decisions and the bugs behind
   them; that is the bar.
 - **Leave the tree clean.** No scratch files, no commented-out code.
+- **`CHANGELOG.md` entries are terse.** One to three lines per item: what changed, and why
+  it matters if that is not obvious. Not a walkthrough of the implementation - that is what
+  the commit and the code are for.
+- **`## [Unreleased]` always stays.** A release moves its entries under the new version
+  heading; it does not rename or remove the `Unreleased` heading itself, empty or not - the
+  next change needs somewhere to log itself.
 - **`README.md` is the PyPI long description.** Images and links in it need absolute URLs -
   PyPI renders it standalone, with no repository for a relative path to resolve against.
 

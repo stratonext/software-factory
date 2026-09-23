@@ -77,7 +77,7 @@ def test_a_rule_fires_on_above_below_equals_or_low_confidence():
 def test_the_first_matching_rule_wins_and_a_rule_with_no_when_is_the_default():
     rules = [
         {"when": "secret", "above": 0.5, "verdict": "human", "notes": "possible credential"},
-        {"when": "scope", "above": 1.5, "verdict": "fail", "notes": "beyond the request"},
+        {"when": "scope", "above": 0.8, "verdict": "fail", "notes": "beyond the request"},
         {"verdict": "pass"},
     ]
     both = {"secret": {"noul": 0.9}, "scope": {"score": 2.0}}
