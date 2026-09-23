@@ -259,16 +259,20 @@ def submit(
              "or --force\n  %s" % (read["specific"], escape(request[:200])))
     if pipeline == "auto":
         pipeline = read.get("pipeline")  # None falls through to the configured default
+    wanted = pipeline or settings["pipeline"]
     try:
         pipe = pl.load(
-            pl.search_path(path, settings["pipelines"]), pipeline or settings["pipeline"],
+            pl.search_path(path, settings["pipelines"]), wanted,
             runners.search_path(path, settings["runners"]), settings["runner"],
         )
     except (FileNotFoundError, ValueError) as e:
         # ValueError too: a pipeline written for 0.1 fails here with the replacement named,
         # and that message is the whole point of the break - a traceback buries it.
         fail(escape(str(e)))
-    item = backend.create(request, pipe.name, pipe.start, repo=str(path), name=name)
+    # Recorded with the qualifier the user gave, so the run resolves the file they meant
+    # and `sf status` shows `local:dev` rather than a `dev` that could be either one.
+    chosen_pipeline = pl.qualified(wanted, pipe.name)
+    item = backend.create(request, chosen_pipeline, pipe.start, repo=str(path), name=name)
     chosen = effort if effort and effort != "auto" else read.get("effort")
     if chosen:
         # On the item, not on the stages: a stage with `with: {effort:}` still wins.
@@ -281,10 +285,10 @@ def submit(
         item["reason"] = "submitted paused %s" % now()
         backend.save(item)
     if as_json(json_):
-        emit_json({"id": item["id"], "name": name, "pipeline": pipe.name, "repo": str(path),
+        emit_json({"id": item["id"], "name": name, "pipeline": chosen_pipeline, "repo": str(path),
                    "status": item["status"]})
     else:
-        out.print(kv([("id", item["id"]), ("name", name), ("pipeline", pipe.name),
+        out.print(kv([("id", item["id"]), ("name", name), ("pipeline", chosen_pipeline),
                       ("effort", chosen or ""), ("status", item["status"] if paused else "")],
                      indent=""))
         if read:
@@ -334,6 +338,17 @@ def _repo_problem(repo):
         # A worktree needs a HEAD; without one the agents get an empty directory.
         return "not a git repository with at least one commit (agents would get an empty workspace)"
     return None
+
+
+def _repo_here():
+    """The current directory if it is inside a git repo, else None.
+
+    The same path `sf submit` would record - so it is the same `.sf/pipelines` a `local:`
+    name would resolve in. No commit required: listing what is on disk is not running it.
+    """
+    probe = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"],
+                           capture_output=True, text=True)
+    return Path.cwd() if probe.returncode == 0 else None
 
 
 @app.command()
@@ -987,6 +1002,66 @@ def _known(pipelines_dir):
 
 def _label(known):
     return "%s v%s" % (known["name"], known["version"])
+
+
+@app.command("pipelines")
+def pipelines_cmd(
+    ctx: typer.Context,
+    tabular: bool = typer.Option(False, "--tabular", "-t",
+                                 help="one padded line each: name, file, flavor"),
+    json_: bool = typer.Option(False, "--json", help=JSON_HELP),
+):
+    """Every pipeline the factory can see: the installation-wide ones, then this repo's own.
+
+    A name in both tiers resolves to the repo's own copy, so `--pipeline dev` is the local
+    one and `--pipeline global:dev` the other - the listing says which is which.
+    """
+    _backend, settings = _open(ctx)
+    repo = _repo_here()
+    local_dir = pl.repo_pipelines(repo) if repo else None
+    groups = [("global", Path(settings["pipelines"]))]
+    if local_dir:
+        groups.append(("local", local_dir))
+    local = {k["name"] for k in _known(local_dir)} if local_dir else set()
+    rows = [
+        {**k, "flavor": flavor, "directory": str(d),
+         "path": str(Path(d) / ("%s.yaml" % k["name"])),
+         # Which row a bare `--pipeline <name>` reaches: the repo's own tier first.
+         "bare": flavor == "local" or k["name"] not in local}
+        for flavor, d in groups for k in _known(d)
+    ]
+    shadowed = local & {r["name"] for r in rows if r["flavor"] == "global"}
+    if as_json(json_):
+        emit_json(rows)
+        return
+    if not rows:
+        out.print("[yellow]no pipelines in %s[/]  [dim]write one: %s[/]" % (
+            escape(", ".join(str(d) for _f, d in groups)), escape("%s/pipelines" % pl.REPO_DIR)))
+        return
+    if tabular:
+        # Hand-padded like the status table, and for the same reason: one line per
+        # pipeline, so `| grep local` is a filter rather than a lost heading.
+        cells = [(r["name"], r["path"], r["flavor"]) for r in rows]
+        widths = [max(len(c[n]) for c in cells) for n in range(3)]
+        for c in cells:
+            out.print("  ".join(escape(v.ljust(w)) for v, w in zip(c, widths)).rstrip())
+        return
+    for flavor, d in groups:
+        here = [r for r in rows if r["flavor"] == flavor]
+        out.print("[bold]%s[/]  [dim]%s[/]" % (flavor, escape(str(d))))
+        if not here:
+            out.print("  [dim]none[/]")
+        wide = max((len(_label(r)) for r in here), default=0)
+        for r in here:
+            # The shadow is what a listing is for: two files, one name, and only one of
+            # them is what `--pipeline dev` has been running all along.
+            shadow = "" if r["name"] not in shadowed else (
+                "  [dim](shadows global:%s)[/]" % escape(r["name"]) if r["bare"]
+                else "  [yellow](shadowed by local:%s)[/]" % escape(r["name"]))
+            out.print(("  %s  %s%s" % (escape(_label(r).ljust(wide)),
+                                       escape(r["description"]), shadow)).rstrip())
+    if not repo:
+        out.print("[dim]no local pipelines: this directory is not in a git repo[/]")
 
 
 @app.command("runners")
