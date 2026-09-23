@@ -1040,6 +1040,17 @@ def _label(known):
     return "%s v%s" % (known["name"], known["version"])
 
 
+def _loads(directory, name):
+    """Whether a pipeline actually loads, and its step count - `summary()` only parses
+    the YAML enough for name/version/description, so this is the rest of `sf doctor`'s
+    old per-pipeline check, now `sf pipelines`' job instead."""
+    try:
+        pipe = pl.load(directory, name)
+        return {"valid": True, "steps": len(pipe.steps), "error": ""}
+    except Exception as e:  # whatever a half-written YAML raises is the finding
+        return {"valid": False, "steps": None, "error": str(e)}
+
+
 @app.command("pipelines")
 def pipelines_cmd(
     ctx: typer.Context,
@@ -1063,7 +1074,8 @@ def pipelines_cmd(
         {**k, "flavor": flavor, "directory": str(d),
          "path": str(Path(d) / ("%s.yaml" % k["name"])),
          # Which row a bare `--pipeline <name>` reaches: the repo's own tier first.
-         "bare": flavor == "local" or k["name"] not in local}
+         "bare": flavor == "local" or k["name"] not in local,
+         **_loads(d, k["name"])}
         for flavor, d in groups for k in _known(d)
     ]
     shadowed = local & {r["name"] for r in rows if r["flavor"] == "global"}
@@ -1088,14 +1100,21 @@ def pipelines_cmd(
             out.print(kv([("path", r["path"])]))
             if r["description"]:
                 out.print(kv([("description", r["description"])]))
+            loads = "%d step(s)" % r["steps"] if r["valid"] else "does not load: %s" % r["error"]
+            out.print(kv([("loads", loads)]))
             out.print()
     else:
         # Hand-padded like the status table, and for the same reason: one line per
         # pipeline, so `| grep local` is a filter rather than a lost heading.
-        cells = [(r["name"], r["path"], r["flavor"]) for r in rows]
-        widths = [max(len(c[n]) for c in cells) for n in range(3)]
-        for c in cells:
-            out.print("  ".join(escape(v.ljust(w)) for v, w in zip(c, widths)).rstrip())
+        cells = [(r["name"], r["path"], r["flavor"],
+                  "%d step(s)" % r["steps"] if r["valid"] else "does not load: %s" % r["error"])
+                 for r in rows]
+        widths = [max(len(c[n]) for c in cells) for n in range(4)]
+        for c, r in zip(cells, rows):
+            padded = [escape(v.ljust(w)) for v, w in zip(c, widths)]
+            if not r["valid"]:
+                padded[3] = "[red]%s[/]" % padded[3]
+            out.print("  ".join(padded).rstrip())
     if not repo:
         out.print("[dim]no local pipelines: this directory is not in a git repo[/]")
 
@@ -1721,6 +1740,7 @@ def doctor(ctx: typer.Context, json_: bool = typer.Option(False, "--json", help=
     known = _known(settings["pipelines"])
     # No pipeline means nothing can be worked, so this is still essential - but the fix is
     # "write one", not "repair your install". None ship: the process is the user's.
+    # Which ones load, and how many steps each has, is `sf pipelines`' job, not this line's.
     check("pipelines", "%d in %s" % (len(known), settings["pipelines"]),
           "" if known else "none yet - write %s/pipelines/<name>.yaml in a "
                            "repo (it wins), or one here for every repo." % pl.REPO_DIR)
@@ -1728,16 +1748,9 @@ def doctor(ctx: typer.Context, json_: bool = typer.Option(False, "--json", help=
     for k in known:
         try:
             pipe = pl.load(settings["pipelines"], k["name"])
-        except Exception as e:  # whatever a half-written YAML raises is the finding
-            # A pipeline in the installation-wide directory was almost certainly seeded by
-            # `sf init`, which never overwrites - so a stale one from an older version sits
-            # there failing to load forever, and re-seeding is the remedy, not hand-editing.
-            check(k["name"], "does not load: %s" % e,
-                  "`sf init --force` re-seeds the shipped pipelines over it, or edit/remove "
-                  "%s" % (Path(settings["pipelines"]) / ("%s.yaml" % k["name"])))
+        except Exception:  # `sf pipelines` reports what a half-written YAML raises
             continue
         judged = judged or any(pipe.kind(stage) == "judge" for stage in pipe.steps)
-        check(k["name"], "v%s, %d step(s), loads" % (pipe.version, len(pipe.steps)))
 
     # Only when this installation would actually ask: a key nobody needs is not a problem.
     # A judged pipeline merely sitting in the directory is not essential either - it is

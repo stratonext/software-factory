@@ -1006,8 +1006,13 @@ def test_doctor_names_what_is_missing_and_exits_non_zero(installation, tmp_path,
     ))
     assert main(["doctor", "--pipelines", str(judging)]) == 1
     report = capsys.readouterr().out
-    assert "j: v1, 1 step(s), loads" in report, "and which pipelines resolve"
+    assert "1 in %s" % judging in report, "just the count and the default path"
+    assert "j: v1, 1 step(s), loads" not in report, "which pipelines resolve is `sf pipelines`'s job"
     assert "TYPESAFE_API_KEY" in report, "asked for once a pipeline judges"
+
+    assert main(["pipelines", "--pipelines", str(judging)]) == 0
+    report = capsys.readouterr().out
+    assert "1 step(s)" in report, "sf pipelines says whether each one is valid, and its step count"
 
 
 def test_an_unreadable_config_is_an_error_message_not_a_traceback(installation, capsys):
@@ -1224,9 +1229,10 @@ def test_pipelines_lists_both_tiers_and_what_shadows_what(
     main(["pipelines"])
     lines = [row for row in capsys.readouterr().out.splitlines() if row.strip()]
     assert len(lines) == 3, lines
-    assert [row.split()[-1] for row in lines] == ["global", "global", "local"]
+    assert [row.split()[2] for row in lines] == ["global", "global", "local"]
     assert [row.split()[0] for row in lines] == ["dev", "quick", "dev"], "global first, then local"
     assert str(repo / ".sf" / "pipelines" / "dev.yaml") in lines[-1], "and where it came from"
+    assert all("1 step(s)" in row for row in lines), "and whether it loads, and how many steps"
 
     main(["pipelines", "--detailed"])
     out = capsys.readouterr().out
