@@ -659,15 +659,41 @@ def _status_markup(status, reason=""):
     return "[%s]%s[/]" % (colour, text) if colour else text
 
 
-def _pipeline_cell(item):
-    """`dev@1`, or `dev@1,2` when the file was edited mid-flight.
+def _pipeline_cell(item, settings, cache):
+    """`local:dev@1`, or `global:dev@1,2` when the file was edited mid-flight.
 
-    The versions this request actually ran steps under, in the order it ran them. A
-    queued request has none yet, and history written before versions existed has none
-    either - both print the bare name.
+    A qualified name (`local:dev`, `global:dev`) is shown as recorded - that already says
+    which file the run resolves. A bare name still ran under exactly one tier, so the
+    prefix is filled in from where it actually resolved (best-effort: an unreadable
+    pipeline, same as `_pipeline_of`, prints the bare name rather than guessing).
+
+    The `@version[,version]` suffix is the versions this request actually ran steps
+    under, in the order it ran them. A queued request has none yet, and history written
+    before versions existed has none either - both print without a suffix.
     """
+    tier, bare = pl.split(item["pipeline"])
+    if not tier:
+        tier = _tier(item, settings, cache)
+    name = "%s:%s" % (tier, bare) if tier else item["pipeline"]
     seen = dict.fromkeys(str(h["version"]) for h in item["history"] if "version" in h)
-    return item["pipeline"] + ("@%s" % ",".join(seen) if seen else "")
+    return name + ("@%s" % ",".join(seen) if seen else "")
+
+
+def _tier(item, settings, cache):
+    """'local' or 'global' - which directory a bare pipeline name actually resolved from.
+
+    None when it cannot be read at all (moved repo, broken YAML): `_pipeline_of` already
+    decided that, and a display helper has no business guessing past it.
+    """
+    pipe = _pipeline_of(item, settings, cache)
+    if pipe is None:
+        return None
+    for i, d in enumerate(pl.search_path(item.get("repo"), settings["pipelines"])):
+        if Path(d) == pipe.dir:
+            return "local" if item.get("repo") and i == 0 else "global"
+    return None
+
+
 def _pipeline_of(item, settings, cache):
     """The request's pipeline as it is on disk now, or None if it cannot be read.
 
@@ -890,7 +916,7 @@ def _summary(item, settings, cache=None, bar=False):
         "id": item["id"],
         "name": item.get("name", "") or "-",
         "repo": Path(item.get("repo", "")).name or "-",
-        "pipeline": _pipeline_cell(item),
+        "pipeline": _pipeline_cell(item, settings, {} if cache is None else cache),
         "stage": _stage_label(item, settings, {} if cache is None else cache, bar),
         "passes": item["passes"],
         "cost_usd": _total_cost(item["history"]),

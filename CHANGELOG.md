@@ -25,6 +25,9 @@ All notable changes to this project are documented here. The format is
 ### Changed
 - The STAGE column now draws as a bar in every human view — `code ███░░░░░ 2/5`. `--json`
   keeps the bare `code 2/5`, since that field is something a script reads.
+- `sf status` / `--json` always prefixes the PIPELINE column with `local:` or `global:`,
+  even for a request that named the pipeline bare - which file it actually resolved to,
+  not just which tier it was asked for.
 
 ## [0.0.2] - 2026-09-21
 

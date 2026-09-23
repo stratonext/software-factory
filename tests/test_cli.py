@@ -1113,12 +1113,31 @@ def test_a_qualified_name_says_which_of_two_dev_pipelines_was_meant(
     main(["status"])
     out = capsys.readouterr().out
     assert "global:dev" in out and "local:dev" in out, "a status row says which file"
+    assert out.count("local:dev") == 2, "the bare `dev` row too - it resolved to the same file"
 
     # And a qualifier that resolves nowhere names the one tier it searched.
     assert main(["submit", "--description", "a", "--name", "x", "--pipeline", "local:nope"]) == 1
     err = capsys.readouterr().err
     assert "no pipeline 'local:nope'" in err and str(repo / ".sf" / "pipelines") in err
     assert str(installation / "pipelines") not in err, "local: never falls back to global"
+
+
+def test_status_prefixes_a_bare_name_with_the_tier_it_resolved(
+        installation, tmp_path, monkeypatch, capsys):
+    """No repo has its own copy, so the bare name only ever resolves to the global one -
+    and status has to say so, not just print the bare `dev` a script can't tell apart
+    from a `local:dev` it never asked to qualify."""
+    _global_pipeline(installation)
+    repo = a_repo(tmp_path / "myproject")
+    shutil.rmtree(repo / ".sf")  # no pipeline of its own: `dev` only exists globally
+    monkeypatch.chdir(repo)
+    main(["submit", "--description", "a thing", "--name", "x", "--pipeline", "dev"])
+    backend = LocalBackend(installation / "state", installation / "worktrees")
+    assert backend.load(_id(capsys))["pipeline"] == "dev", "still recorded bare"
+
+    capsys.readouterr()
+    main(["status"])
+    assert "global:dev" in capsys.readouterr().out
 
 
 def test_local_without_a_repo_is_a_message_and_not_a_traceback(
