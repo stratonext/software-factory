@@ -21,6 +21,9 @@ All notable changes to this project are documented here. The format is
   every `--interval` seconds under `sf run`'s concurrency quota. `sf daemon status` /
   `stop` manage it. Pairs with `sf submit --paused`, which keeps a request out of its way
   until `sf run <id>` starts it.
+- `docs/pipeline-schema.yaml`'s `$id` is now its published raw GitHub URL, so any pipeline
+  file - in this repo or any other - can point a `# yaml-language-server: $schema=` comment
+  at it directly, not only at a relative path that only resolves inside this checkout.
 
 ### Changed
 - The STAGE column now draws as a bar in every human view — `code ███░░░░░ 2/5`. `--json`

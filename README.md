@@ -191,7 +191,12 @@ each one supports. Adding one is a YAML file too, so a stage can run a different
 Everything a pipeline can say — `input:`, `output:`, `review:` gates, judge steps,
 concurrency, costs — is in [`docs/pipelines.md`](docs/pipelines.md), and
 [`docs/pipeline-schema.yaml`](docs/pipeline-schema.yaml) is the annotated schema your editor
-can use for completion.
+can use for completion. Point at it from any pipeline file, in this repo or any other, with
+a first line:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/stratonext/software-factory/main/docs/pipeline-schema.yaml
+```
 
 ## Judging with Jev
 

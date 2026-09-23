@@ -1,9 +1,12 @@
 # JSON Schema (draft 2020-12) for a factory pipeline file, written in YAML.
 #
-# Point an editor at it with a first line in the pipeline file:
+# Point an editor at it with a first line in the pipeline file. From inside this repo, a
+# relative path:
 #   # yaml-language-server: $schema=../docs/pipeline-schema.yaml
+# From a pipeline in any other repo, or in ~/.sf/pipelines/, the published copy:
+#   # yaml-language-server: $schema=https://raw.githubusercontent.com/stratonext/software-factory/main/docs/pipeline-schema.yaml
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://github.com/stratonext/software-factory/docs/pipeline-schema.yaml
+$id: https://raw.githubusercontent.com/stratonext/software-factory/main/docs/pipeline-schema.yaml
 title: factory pipeline
 type: object
 required: [steps]
