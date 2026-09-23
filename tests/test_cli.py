@@ -471,6 +471,8 @@ def test_show_and_replay_report_a_step_in_flight(tmp_path, capsys):
         assert main(cli + ["show", "1"]) == 0
         out = capsys.readouterr().out
         assert "running: step 1: a (command)" in out and "pid: %d" % pid in out
+        assert "stage: a " in out and "a 1/1" not in out, \
+            "in flight is not behind the request yet - same 0/1 a queued request reads"
 
         capsys.readouterr()
         assert main(cli + ["replay", "1"]) == 0

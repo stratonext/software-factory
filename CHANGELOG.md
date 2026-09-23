@@ -47,6 +47,11 @@ All notable changes to this project are documented here. The format is
 - A `paused` request's STAGE bar read as fully worked (`a ████████ 1/1`) though it had
   never run - the bar only knew `queued` meant "not yet", so anything else, `paused`
   included, read as "already past this stage". It now reads `0/1`, same as `queued`.
+- Same bug, `running` this time: `sf show` on a request whose first (of two) step was
+  still in flight read `stage: code 1/2` - "behind the request" - right next to a
+  `running: step 1: code ... elapsed: 17s` line saying that exact step had not finished.
+  A step in progress is not behind the request either; it reads `0/2` now, coherent with
+  the `running:` line under it.
 
 ## [0.0.2] - 2026-09-21
 
