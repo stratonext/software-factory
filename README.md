@@ -139,42 +139,9 @@ pipeline decides that with a test run or a [Jev judgment](#judging-with-jev).
 
 A pipeline is a YAML file in the repo's own `.sf/pipelines/<name>.yaml`, or in
 `~/.sf/pipelines/` for every repo. The repo's own copy wins, so two repos can both have a
-`dev` pipeline and mean different processes.
-
-`sf pipelines` lists both tiers, and says which file a bare `--pipeline dev` would reach
-when the name exists in both. To say which one you mean, qualify it: `--pipeline local:dev`
-searches only the repo's own directory, `--pipeline global:dev` only `~/.sf/pipelines`. The
-qualifier is recorded on the request, so `sf status` shows `local:dev` and the run resolves
-the file that was submitted against.
-
-The Quickstart's `quick` is about as small as one gets. Here is the next step up — implement,
-test, and send the work back to the coder if the tests fail:
-
-```yaml
-name: dev
-description: Implement a change, and only keep it if the tests pass.
-start: code            # which step a new request enters; defaults to the first
-max_passes: 2          # rework round-trips before a human is asked instead
-
-steps:
-  code:
-    uses: claude                    # which runner performs this step
-    with:
-      prompt: prompts/code.md       # prompt file, relative to this pipeline
-    next: test                      # unconditional edge
-
-  test:
-    uses: shell
-    with:
-      run: "pytest -q"              # exit 0 = pass, anything else = fail
-    on: { pass: done, fail: code }  # a backwards edge is rework, and costs one pass
-```
-
-Submit against it with `sf submit --description "..." --pipeline dev` — the name is the file's, so
-`dev.yaml` is `--pipeline dev`. `~/.sf/pipelines/` serves every repo; a `.sf/pipelines/` in a
-repo wins over it, which is how one repo keeps a process of its own. [`examples/`](examples/)
-has four more to copy: implement-and-commit, the full reviewed line, a judged secret
-gate, and one that opens the pull request.
+`dev` pipeline and mean different processes; `sf pipelines` lists both tiers and says which
+file a bare `--pipeline dev` reaches when the name exists in both (qualify it with
+`--pipeline local:dev` / `global:dev` to pick one).
 
 A step says **who performs it** (`uses:`) and **what to hand them** (`with:`), and needs at
 least one of `next:` or `on:`. `done` is the implicit terminal stage. Three runners ship
@@ -184,16 +151,18 @@ built in:
 |---|---|
 | `claude` | Claude Code, non-interactive. `with: {prompt:, effort:, model:}` |
 | `shell` | an ordinary command. `with: {run:}` |
-| `typesafe` | a typed judgment instead of an agent. `with: {questions:}` |
+| `typesafe` | a typed judgment instead of an agent — see [Judging with Jev](#judging-with-jev) below. `with: {questions:}` |
 
 `sf runners` lists every runner a step can name, whether its binary is on PATH, and what
 each one supports. Adding one is a YAML file too, so a stage can run a different agent CLI.
 
-Everything a pipeline can say — `input:`, `output:`, `review:` gates, judge steps,
-concurrency, costs — is in [`docs/pipelines.md`](docs/pipelines.md), and
-[`docs/pipeline-schema.yaml`](docs/pipeline-schema.yaml) is the annotated schema your editor
-can use for completion. Point at it from any pipeline file, in this repo or any other, with
-a first line:
+[`examples/`](examples/) has four pipelines to copy: implement-and-commit, the full reviewed
+line with rework, a judged secret gate, and one that opens the pull request. For everything
+else a pipeline can say — `input:`/`output:`, `review:` gates, judge steps, concurrency,
+sessions, cost — see **[`docs/pipelines.md`](docs/pipelines.md)**, the full reference, and
+**[`docs/pipeline-schema.yaml`](docs/pipeline-schema.yaml)**, the annotated JSON Schema your
+editor can use for completion. Point at it from any pipeline file, in this repo or any other,
+with a first line:
 
 ```yaml
 # yaml-language-server: $schema=https://raw.githubusercontent.com/stratonext/software-factory/main/docs/pipeline-schema.yaml
@@ -202,65 +171,25 @@ a first line:
 ## Judging with Jev
 
 `typesafe` is the third built-in runner, and the one that is not an agent. A step that
-`uses: typesafe` sends the diff and the scratch files as **state**, asks the typed questions
-you wrote, and gets typed answers back from [TypeSafe](https://typesafe.ai)'s System One
-model, **Jev** — a probability, a position on an ordered scale, one of a set of choices. The
-pipeline routes on those numbers with thresholds you declare, so the decision is data rather
-than an agent's prose.
+`uses: typesafe` sends the diff as **state**, asks typed questions you wrote, and gets a
+probability, a position on a scale or a choice back from [TypeSafe](https://typesafe.ai)'s
+System One model, **Jev** — so a pipeline routes on data with thresholds you declare, rather
+than an agent's prose. A judgment costs about **$0.0002** against **$1–2** for a review
+agent, so it pays for itself the first time it filters a diff before the expensive reviewer
+sees it.
 
-```yaml
-  gate:
-    uses: typesafe
-    with:
-      questions: prompts/review-gate.yaml   # the questions and the routing, beside the prompts
-    input: [plan.md]
-    output: gate.md
-    on: { pass: review, fail: code }        # a cheap filter before the expensive reviewer
-```
+It is **opt-in and off by default**: it needs `TYPESAFE_API_KEY`, and without one nothing
+here is reached — submit behaves exactly as it always did. A step that does name this runner
+and cannot ask — no key, an HTTP error, a question left unanswered — returns `human` and
+parks the request rather than guessing.
 
-```yaml
-# prompts/review-gate.yaml
-state:      { diff: "git diff" }          # shell commands; stdout becomes a named state field
-questions:
-  secret: { type: noul, instructions: "`diff` hardcodes a credential, key, token or password." }
-  scope:  { type: score, instructions: "How far does `diff` go beyond `request`?",
-            criteria: ["exactly the request", "small extras", "large unrelated changes"] }
-route:                                     # first match wins; a rule with no `when` is default
-  - { when: secret, above: $secret, verdict: human, notes: "possible hardcoded credential" }
-  - { when: scope,  above: 0.8,     verdict: fail,  notes: "goes well beyond the request" }
-  - { verdict: pass }
-```
+The same model can also pick the process for you: `--pipeline auto` and `--effort auto` ask
+it which pipeline a request belongs in and how hard the agent should think, before anything
+is queued, and flag a request too vague for anyone to start on.
 
-Why bother, when an agent could be asked the same thing in English: a judgment costs about
-**$0.0002** where a review agent costs **$1–2**, it answers in milliseconds, and it is not
-the worker grading its own work. The notes the factory records carry the number that fired —
-`secret 0.71 > 0.5 - possible hardcoded credential` — so a verdict can be argued with. Use it
-as a gate in front of the expensive stages, not as a replacement for them.
-
-`above: $secret` reads `typesafe.thresholds.secret` from `~/.sf/config.yaml`, so a gate that
-turns out to be too eager is one edit for every pipeline that uses it; a rule that writes a
-literal still wins. A `$name` the config does not define parks the request rather than being
-read as zero.
-
-The same model can also pick the process for you. `--pipeline auto` and `--effort auto` ask
-Jev which pipeline a request belongs in and how hard the agent should think, in one call
-before anything is queued, and flag a request too vague for anyone to start on:
-
-```bash
-sf submit --description "the upload endpoint 500s on files over 2MB" --pipeline auto --effort auto
-```
-
-All of it is **opt-in and off by default**: it needs `TYPESAFE_API_KEY`, and without one
-nothing here is reached — submit behaves exactly as it always did. A step that *does* name
-this runner and cannot ask — no key, an HTTP error, a rule about a question that was not
-answered — returns `human` and parks the request. The factory never guesses a verdict, and a
-service it could not reach is a decision nobody made.
-
-The questions are fixed by the pipeline author, and only the diff and the scratch files
-arrive as state. That separation is deliberate: an agent wrote the diff, so the diff is not
-trusted input, and it must never be able to reach the model as an instruction.
-[`docs/pipelines.md`](docs/pipelines.md) has the whole shape, question types included.
-
+[`docs/pipelines.md`](docs/pipelines.md#the-third-kind-of-stage-judge) has the whole shape —
+question types, thresholds, the `typesafe:` config block — and
+[`examples/secret-gate.yaml`](examples/secret-gate.yaml) is a working gate to copy.
 
 ## Commands
 
