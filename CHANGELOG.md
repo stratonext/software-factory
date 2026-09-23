@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format is
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-09-23
+
+Promoted 0.0.3rc1 to 0.0.3
+
 ## [0.0.3rc1] - 2026-09-23
 
 ### Added

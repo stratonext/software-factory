@@ -1,6 +1,6 @@
 [project]
 name = "software-factory"
-version = "0.0.3rc1"
+version = "0.0.3"
 description = "An agent software factory: requests flow through YAML-defined pipelines of agent, command and judge steps."
 readme = "README.md"
 requires-python = ">=3.11"
