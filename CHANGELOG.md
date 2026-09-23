@@ -28,6 +28,15 @@ All notable changes to this project are documented here. The format is
 - `sf status` / `--json` always prefixes the PIPELINE column with `local:` or `global:`,
   even for a request that named the pipeline bare - which file it actually resolved to,
   not just which tier it was asked for.
+- `sf run` now starts an engine in the background and returns at once by default, the same
+  shape `sf daemon` already has; `--wait` is the opt-in form that blocks until the queue is
+  worked (what gates CI). Replaces `--detach`, which was the opt-in the other way round.
+
+### Fixed
+- Unparking a request (`sf run <id>`, e.g. after `sf pause`) could run it immediately even
+  with every worker already spent elsewhere - a daemon, or a second `sf run` - blowing past
+  the configured `concurrency`. It now goes back to `queued` and waits its turn like
+  anything else in the line.
 
 ## [0.0.2] - 2026-09-21
 

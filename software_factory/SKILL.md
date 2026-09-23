@@ -29,8 +29,8 @@ daemon serves every image. Requests outlive your shell: submit here, ask from an
 | Command | What it does |
 |---|---|
 | `sf submit --description "<request>" --name <label>` | queue a request; prints its id. `--file <path>` (`-` for stdin) for a long request, `--pipeline <name>` (`local:<name>` / `global:<name>` when the same name exists in both tiers), `--repo <path>`, `--run` to work it immediately, `--paused` to queue it without letting `sf run`/`sf daemon` pick it up yet |
-| `sf run` | work the queue, **blocking until it is done**. `--detach` leaves an engine working in the background instead, `--repo` limits to this repo, `<ids>` to only these, `--concurrency N` |
-| `sf pause <ids>` | pull queued requests back out of the queue without cancelling them; `sf run <id>` resumes one, same as unparking `needs_human` |
+| `sf run` | work the queue: **starts an engine in the background and returns at once**. `--wait` blocks until it is done instead, `--repo` limits to this repo, `<ids>` to only these, `--concurrency N` |
+| `sf pause <ids>` | pull queued requests back out of the queue without cancelling them; `sf run <id>` resumes one, same as unparking `needs_human` - it goes back to `queued` and is worked when a slot is free, never past the configured concurrency |
 | `sf daemon start` | leave an engine running that keeps working the queue as requests land, polling every `--interval` seconds (default 5) under the same `--concurrency` quota `sf run` uses. `sf daemon status` / `sf daemon stop` |
 | `sf` / `sf status` | every request across every repo — the `docker ps` of the factory: one line per request, a table you can `| grep`. `-d`/`--detailed` is the fuller block form, with each request's text. `-m`/`--monitor` keeps the table on screen and refreshes it once a second until Ctrl-C — a terminal only, so never yours: poll `sf status` instead |
 | any command | **you get JSON**: output is JSON whenever stdout is not a terminal, which it never is for you. `--json` says so explicitly; `SF_OUTPUT=human` gets the text form |
@@ -55,12 +55,15 @@ daemon serves every image. Requests outlive your shell: submit here, ask from an
    in its own worktree — `<worktrees>/<repo name>/<id>`, `~/.sf/worktrees/...` by default,
    and printed as `.workspace` by `sf show <id>`. Not in the repo you submitted from.
 
-`sf run` **blocks** until the queue is worked, exiting non-zero when nothing reached
-`done` — so its exit code is a real answer and can gate CI. `--detach` is the opt-in form
-that returns at once: after that one its exit code says only that the engine started, so
-poll `sf` rather than reporting anything as done.
+`sf run` **returns at once**: it starts an engine in the background and its exit code says
+only that something started, so poll `sf` rather than reporting anything as done. `--wait`
+is the opt-in form that blocks until the queue is worked, exiting non-zero when nothing
+reached `done` — that is what gates CI, not the default.
 
 `sf run <id>` is also the recovery path for a request left `running` by a killed engine.
+Unparking never exceeds the concurrency quota: if every slot is already spent - another
+`sf run`, or the daemon - the request goes back to `queued` and waits its turn instead of
+running anyway.
 
 ## When a request is parked (`needs_human`)
 

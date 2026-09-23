@@ -211,7 +211,7 @@ def test_status_shows_the_stage_position_in_the_pipeline(installation, tmp_path,
     out = capsys.readouterr().out
     assert "a %s0/1" % _bar(0, 1) in out, "queued: it has not worked that stage yet"
 
-    main(["run", "1"])
+    main(["run", "1", "--wait"])
     capsys.readouterr()
     main([])
     assert "done %s1/1" % _bar(1, 1) in capsys.readouterr().out, "done is not a step, so N/N"
@@ -318,8 +318,8 @@ def test_run_returns_before_the_work_is_finished(installation, tmp_path, monkeyp
     item_id = _id(capsys)
 
     started = time.monotonic()
-    assert main(["run", "--detach"]) == 0
-    assert time.monotonic() - started < 1.5, "run --detach blocked on the pipeline"
+    assert main(["run"]) == 0
+    assert time.monotonic() - started < 1.5, "run blocked on the pipeline"
     assert "id: %s  status: started" % item_id in capsys.readouterr().out
 
     backend = LocalBackend(installation / "state", installation / "worktrees")
@@ -384,7 +384,7 @@ def test_run_waits_when_asked(installation, tmp_path, monkeypatch, capsys):
     main(["submit", "--description", "quick work", "--name", "quick-work"])
     item_id = _id(capsys)
 
-    assert main(["run"]) == 0
+    assert main(["run", "--wait"]) == 0
     backend = LocalBackend(installation / "state", installation / "worktrees")
     assert backend.load(item_id)["status"] == "done", "a blocking run needs no polling"
 
@@ -400,10 +400,10 @@ def test_run_with_an_id_unparks_a_request_and_works_it(installation, tmp_path, m
     item_id = _id(capsys)
     backend = LocalBackend(installation / "state", installation / "worktrees")
 
-    main(["run", item_id])
+    main(["run", item_id, "--wait"])
     assert backend.load(item_id)["status"] == "needs_human"
 
-    assert main(["run", item_id, "--note", "the users table"]) == 0
+    assert main(["run", item_id, "--note", "the users table", "--wait"]) == 0
     item = backend.load(item_id)
     assert item["status"] == "done", "unparked and worked in the same call"
     assert item["passes"] == 1, "a human unblocking an agent is not a rework pass"
@@ -510,7 +510,7 @@ def test_a_cancelled_request_is_resumable(tmp_path):
     assert drain(backend, pipelines)[0]["status"] == "cancelled", "cancelled is not queued"
 
     main(["--backend", str(tmp_path / "state"), "--pipelines", pipelines,
-          "--worktrees", str(tmp_path / "worktrees"), "run", "1"])
+          "--worktrees", str(tmp_path / "worktrees"), "run", "1", "--wait"])
     assert backend.load("1")["status"] == "done", "`run <id>` picks a cancelled request back up"
 
 
@@ -521,8 +521,24 @@ def test_pause_pulls_a_queued_request_out_and_run_resumes_it(tmp_path):
     assert backend.load("1")["status"] == "paused"
     assert engine.queued(backend) == [], "a paused request is not queued"
 
-    main(["--backend", str(tmp_path / "state"), "--pipelines", pipelines, "run", "1"])
+    main(["--backend", str(tmp_path / "state"), "--pipelines", pipelines, "run", "1", "--wait"])
     assert backend.load("1")["status"] == "done", "`run <id>` resumes a paused request"
+
+
+def test_run_id_leaves_a_paused_request_queued_when_at_capacity(tmp_path):
+    """Unparking must not borrow a slot beyond the quota: with every worker already
+    `running`, `run <id>` puts a paused request back in the queue and stops there,
+    for whichever engine polls next - it does not force it through regardless."""
+    backend, pipelines = build(tmp_path, steps={"a": sh("true", next="done")})
+    backend.create("busy", "t", "a")
+    backend.claim(backend.load("1"))  # simulates a slot already spent elsewhere
+    backend.create("waiting", "t", "a")
+    assert main(["--backend", str(tmp_path / "state"), "pause", "2"]) == 0
+
+    main(["--backend", str(tmp_path / "state"), "--pipelines", pipelines,
+          "run", "2", "--wait", "--concurrency", "1"])
+    assert backend.load("2")["status"] == "queued", "the running item ate the only slot"
+    assert backend.load("1")["status"] == "running", "untouched by the other request's run"
 
 
 def test_pause_refuses_a_non_queued_request(tmp_path):
@@ -597,7 +613,7 @@ def test_the_cli_surface_survives(installation, tmp_path, monkeypatch, capsys):
     main(["submit", "--description", "one thing", "--name", "one-thing"])
     capsys.readouterr()
 
-    assert main(["run", "--repo"]) == 0, "`--repo` with no value still means 'here'"
+    assert main(["run", "--repo", "--wait"]) == 0, "`--repo` with no value still means 'here'"
     assert "id: 1" in capsys.readouterr().out
 
     assert main(["--help"]) == 0, "help prints and returns, it does not exit the process"
@@ -645,7 +661,7 @@ def test_status_shows_every_version_a_request_ran_under(installation, tmp_path, 
     main(["status"])
     assert "dev@" not in capsys.readouterr().out, "nothing has run yet: no version to show"
 
-    main(["run"])
+    main(["run", "--wait"])
     assert [h["version"] for h in backend.load("1")["history"]] == [1, 1]
     capsys.readouterr()
     main(["status"])
@@ -653,7 +669,7 @@ def test_status_shows_every_version_a_request_ran_under(installation, tmp_path, 
 
     # Edit the pipeline, then re-enter the finished request at its second stage.
     definition.write_text(definition.read_text().replace("version: 1", "version: 2"))
-    main(["run", "1", "--stage", "b"])
+    main(["run", "1", "--stage", "b", "--wait"])
     assert [h["version"] for h in backend.load("1")["history"]] == [1, 1, 2]
     capsys.readouterr()
     main(["status"])
@@ -765,7 +781,7 @@ def test_a_promoted_setting_reaches_the_step_it_caps(installation, tmp_path, mon
     (installation / "config.yaml").write_text("step_timeout: 1\n")
     monkeypatch.chdir(repo)
     main(["submit", "--description", "sit there", "--name", "slow"])
-    main(["run", "1"])
+    main(["run", "1", "--wait"])
     capsys.readouterr()
 
     item = LocalBackend(installation / "state", installation / "worktrees").load("1")
@@ -905,8 +921,8 @@ def test_run_wait_exits_non_zero_when_nothing_reached_done(installation, tmp_pat
     monkeypatch.chdir(repo)
     main(["submit", "--description", "will not pass", "--name", "nope"])
 
-    assert main(["run"]) == 1, "it parked; nothing reached done"
-    assert main(["run"]) == 0, "an empty queue is not a failure"
+    assert main(["run", "--wait"]) == 1, "it parked; nothing reached done"
+    assert main(["run", "--wait"]) == 0, "an empty queue is not a failure"
 
 
 
@@ -914,7 +930,7 @@ def test_replay_says_no_instead_of_quietly_doing_something_else(installation, tm
     """--artifact without --step was ignored, and --step 0 fell through to the whole run."""
     monkeypatch.chdir(a_repo(tmp_path / "myproject"))
     main(["submit", "--description", "one thing", "--name", "one-thing"])
-    main(["run"])
+    main(["run", "--wait"])
     capsys.readouterr()
 
     assert main(["replay", "1", "--artifact", "output.txt"]) == 1
@@ -1056,7 +1072,7 @@ def test_monitor_draws_the_stage_as_a_bar(installation, tmp_path, monkeypatch, c
     assert lines[0].index("STATUS") == lines[1].index("queued") == lines[2].index("queued")
     assert BAR_DONE not in frame.plain, "queued: no cell is lit"
 
-    main(["run", "1"])
+    main(["run", "1", "--wait"])
     frame = _frame(backend, settings)
     assert "done %s1/1" % _bar(1, 1) in frame.plain, "re-read every tick"
     green = [frame.plain[s.start:s.end] for s in frame.spans if str(s.style) == "green"]
@@ -1148,7 +1164,7 @@ def test_local_without_a_repo_is_a_message_and_not_a_traceback(
     backend = LocalBackend(installation / "state", installation / "worktrees")
     backend.create("a thing", "local:dev", "a", repo="", name="x")
 
-    assert main(["run", "1"]) == 1
+    assert main(["run", "1", "--wait"]) == 1
     assert "no repo" in capsys.readouterr().out
     assert backend.load("1")["status"] == "failed"
 

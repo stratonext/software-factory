@@ -296,9 +296,9 @@ def submit(
                           ("specific", "%.2f" % read["specific"] if "specific" in read else "")]))
     if run_now:
         # ponytail: hand off to `run`, so --run prints exactly what `sf run <id>` prints.
-        # detach=False: --run means "work it now", in front of me. repo: submit's --repo is
+        # wait=True: --run means "work it now", in front of me. repo: submit's --repo is
         # where to work, run's is a filter - the id already says which.
-        run(ctx, ids=[item["id"]], repo=None, concurrency=None, detach=False, note="",
+        run(ctx, ids=[item["id"]], repo=None, concurrency=None, wait=True, note="",
             stage=None, json_=json_)
 
 
@@ -357,28 +357,27 @@ def run(
     ids: Optional[List[str]] = typer.Argument(None, help="only these requests; parked ones are unparked first"),
     repo: Optional[str] = typer.Option(None, help="only requests for this repo; a bare --repo means here (default: every repo)"),
     concurrency: Optional[int] = typer.Option(None, help="how many items to work at once"),
-    detach: bool = typer.Option(False, "--detach", help="leave an engine running in the background and return at once"),
+    wait: bool = typer.Option(False, "--wait", help="block until the queue is worked instead of returning at once"),
     note: str = typer.Option("", help="your answer to the agent, added to its context"),
     stage: Optional[str] = typer.Option(None, help="re-enter at this stage instead of the one the request is parked at"),
     json_: bool = typer.Option(False, "--json", help=JSON_HELP),
 ):
     """Work the queue; by default everything that is queued.
 
-    Blocks until the queue is worked. `--detach` forks an engine that outlives this command
-    and returns at once - the right thing for a long line, the wrong thing for anything that
-    should stop when you stop watching it. Blocking, the exit code is 1 unless something
-    reached `done`, so it can gate CI.
-
+    Leaves an engine working in the background and returns at once - the right thing for a
+    long line, the wrong thing for a script that needs to know how it went. `--wait` blocks
+    until the queue is worked instead; blocking, the exit code is 1 unless something reached
+    `done`, so it can gate CI.
     """
     backend, settings = _open(ctx)
     path = str(Path(repo).expanduser().resolve()) if repo else None
     ids = list(ids or [])
-    # Unpark before deciding to detach: a parked request is not queued, so the detached
-    # path below would report "nothing queued" and drop --note on the floor.
+    # Unpark before deciding whether to wait: a parked request is not queued, so the
+    # detached path below would report "nothing queued" and drop --note on the floor.
     problem = _unpark(backend, ids, note, stage, settings)
     if problem:
         fail(problem)
-    if detach:
+    if not wait:
         items = engine.queued(backend, ids, path)
         if not items:
             out.print("[dim]nothing queued[/]")
@@ -391,6 +390,12 @@ def run(
             out.print(kv([("id", item["id"]), ("status", "started")], indent=""))
         out.print("  [dim]sf status[/]  what is in flight")
         out.print("  [dim]tail -f %s[/]" % escape(str(log)))
+        return
+    # Checked up front so a queue that is merely at capacity (every worker elsewhere
+    # already spoken for) is not reported the same as one with nothing in it at all.
+    items = engine.queued(backend, ids, path)
+    if not items:
+        out.print("[dim]nothing queued[/]")
         return
     done = engine.run(
         backend,
@@ -411,7 +416,7 @@ def run(
     if as_json(json_):
         emit_json([_summary(i, settings, {}) for i in done])
     elif not done:
-        out.print("[dim]nothing queued[/]")
+        out.print("[dim]at capacity - still queued, nothing started[/]")
     else:
         for item in done:
             out.print(kv([("id", item["id"]), ("stage", item["stage"])], indent="")
@@ -438,8 +443,8 @@ def _state_dir(settings):
 def _detach(settings, ids, repo, concurrency):
     """Re-invoke ourselves to work the queue, and leave it running.
 
-    Opt-in, never the default: a process that outlives the command which started it is
-    something you should have to ask for. Two engines racing for the same item is already
+    The default, not an opt-in: a command that returns before minutes of agent time are
+    up is the right shape for a terminal. Two engines racing for the same item is already
     safe - `claim` is a compare-and-set - so a detached run needs no lock of its own.
     """
     # __package__, not a literal: the package was renamed once and this line was not,
@@ -447,7 +452,7 @@ def _detach(settings, ids, repo, concurrency):
     argv = [sys.executable, "-m", __package__]
     for flag in ("backend", "worktrees", "pipelines"):
         argv += ["--%s" % flag, str(settings[flag])]
-    argv += ["run", *ids]  # the child blocks: it *is* the engine
+    argv += ["run", "--wait", *ids]  # the child blocks: it *is* the engine
     if repo:
         argv += ["--repo", repo]
     if concurrency:

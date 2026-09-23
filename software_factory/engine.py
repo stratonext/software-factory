@@ -34,7 +34,9 @@ def run(backend, pipelines_dir, concurrency=None, ids=None, repo=None, default_c
 
     `concurrency` is an explicit `--concurrency` and wins; failing that the pipelines being
     worked say how much parallelism they want, and `default_concurrency` is the configured
-    fallback for the ones that do not.
+    fallback for the ones that do not. Whatever that resolves to, items already `running`
+    elsewhere shrink it first - unparking one more request must not push the installation
+    past the quota it was configured for, so an item this call cannot fit stays `queued`.
     """
     items = queued(backend, ids, repo)
     if not items:
@@ -54,9 +56,20 @@ def run(backend, pipelines_dir, concurrency=None, ids=None, repo=None, default_c
             failed.append(_stop(backend, item, "failed", "pipeline '%s': %s" % (item["pipeline"], e)))
             continue
         work.append(item)
+    if not work:
+        return failed
     workers = concurrency or max(
         (p.concurrency for p in pipes if p.concurrency), default=default_concurrency
     )
+    # Another engine - a daemon, or a second `sf run` unparking one more item - may already
+    # be spending part of this same quota. A snapshot, not a live semaphore: good enough to
+    # stop one call from doubling the concurrency the installation was configured for, not
+    # a guarantee under a race. Zero available slots means every item here stays queued for
+    # whichever engine polls next, rather than borrowing a slot beyond the quota.
+    running = sum(1 for i in backend.all() if i["status"] == "running")
+    workers = max(0, workers - running)
+    if workers == 0:
+        return failed
     # Resolved here rather than deeper down: a step with no timeout at all would wait on a
     # hung `claude` forever, which is not a default anyone asked for.
     step_timeout = STEP_TIMEOUT if step_timeout is None else step_timeout

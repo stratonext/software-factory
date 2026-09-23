@@ -261,7 +261,7 @@ trusted input, and it must never be able to reach the model as an instruction.
 ```bash
 sf init                     # create ~/.sf, its config.yaml and its directories
 sf submit --description "..." --name x    # queue a request against this repo (--file, --pipeline, --run, --paused)
-sf run                      # work the queue (--repo, <id>..., --detach, --note, --stage)
+sf run                      # work the queue in the background, returns at once (--wait to block, --repo, <id>..., --note, --stage)
 sf daemon start              # keep working the queue as requests land (--interval, --concurrency, --repo)
 sf daemon status             # is a background engine running?
 sf daemon stop                # stop it; steps already in flight keep going
@@ -271,7 +271,7 @@ sf replay 1                 # play a run back (--step, --json)
 sf config                   # the settings in effect, and where they would be changed
 sf pipelines                # every pipeline the factory can see (--detailed for the block form)
 sf runners                  # every runner a step can use, and whether it is installed
-sf pause 1 2                 # pull queued requests back out; `sf run <id>` resumes one
+sf pause 1 2                 # pull queued requests back out; `sf run <id>` resumes one, never past the concurrency quota
 sf cancel 1 2               # stop requests now; `sf run <id>` picks one back up
 sf delete 1 2               # drop requests: item, artifacts and worktree
 sf reset 1 2                # back to the start of the pipeline, notes dropped, history kept

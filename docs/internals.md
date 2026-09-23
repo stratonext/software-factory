@@ -110,6 +110,13 @@ Several Claude Code instances run against one subscription, and that subscriptio
 limits. The pipeline's `concurrency` is a knob to tune against those limits, not to maximise.
 The default is 2.
 
+Two engines can be live on the same installation - a daemon, and a second `sf run`
+unparking one more request - and neither knows the other's plans ahead of time. Each one
+checks `backend.all()` for items already `running` before sizing its own worker pool, so
+one does not simply add its full quota on top of what the other is already spending. A
+snapshot, not a lock: good enough to stop the common case (an unparked request blowing
+past the configured ceiling), not a guarantee under a tight race.
+
 ### Deliberate omissions
 
 No database — a directory of JSON files is inspectable with `cat` and survives the process.
