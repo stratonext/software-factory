@@ -1007,8 +1007,8 @@ def _label(known):
 @app.command("pipelines")
 def pipelines_cmd(
     ctx: typer.Context,
-    tabular: bool = typer.Option(False, "--tabular", "-t",
-                                 help="one padded line each: name, file, flavor"),
+    detailed: bool = typer.Option(False, "--detailed", "-d",
+                                  help="a block per pipeline, with its path and description"),
     json_: bool = typer.Option(False, "--json", help=JSON_HELP),
 ):
     """Every pipeline the factory can see: the installation-wide ones, then this repo's own.
@@ -1038,28 +1038,28 @@ def pipelines_cmd(
         out.print("[yellow]no pipelines in %s[/]  [dim]write one: %s[/]" % (
             escape(", ".join(str(d) for _f, d in groups)), escape("%s/pipelines" % pl.REPO_DIR)))
         return
-    if tabular:
+    if detailed:
+        # A block per pipeline, styled like `status --detailed`: a bold header line, then
+        # indented kv() lines - clearer than the old dump grouped under a flavor heading.
+        wide = max(len(_label(r)) for r in rows)
+        for r in rows:
+            # The shadow is what a listing is for: two files, one name, and only one of
+            # them is what `--pipeline dev` has been running all along.
+            shadow = "" if r["name"] not in shadowed else (
+                "  [dim](shadows global:%s)[/]" % escape(r["name"]) if r["bare"]
+                else "  [yellow](shadowed by local:%s)[/]" % escape(r["name"]))
+            out.print("[bold]%s[/]  %s%s" % (escape(_label(r).ljust(wide)), r["flavor"], shadow))
+            out.print(kv([("path", r["path"])]))
+            if r["description"]:
+                out.print(kv([("description", r["description"])]))
+            out.print()
+    else:
         # Hand-padded like the status table, and for the same reason: one line per
         # pipeline, so `| grep local` is a filter rather than a lost heading.
         cells = [(r["name"], r["path"], r["flavor"]) for r in rows]
         widths = [max(len(c[n]) for c in cells) for n in range(3)]
         for c in cells:
             out.print("  ".join(escape(v.ljust(w)) for v, w in zip(c, widths)).rstrip())
-        return
-    for flavor, d in groups:
-        here = [r for r in rows if r["flavor"] == flavor]
-        out.print("[bold]%s[/]  [dim]%s[/]" % (flavor, escape(str(d))))
-        if not here:
-            out.print("  [dim]none[/]")
-        wide = max((len(_label(r)) for r in here), default=0)
-        for r in here:
-            # The shadow is what a listing is for: two files, one name, and only one of
-            # them is what `--pipeline dev` has been running all along.
-            shadow = "" if r["name"] not in shadowed else (
-                "  [dim](shadows global:%s)[/]" % escape(r["name"]) if r["bare"]
-                else "  [yellow](shadowed by local:%s)[/]" % escape(r["name"]))
-            out.print(("  %s  %s%s" % (escape(_label(r).ljust(wide)),
-                                       escape(r["description"]), shadow)).rstrip())
     if not repo:
         out.print("[dim]no local pipelines: this directory is not in a git repo[/]")
 

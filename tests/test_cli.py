@@ -1142,6 +1142,13 @@ def test_pipelines_lists_both_tiers_and_what_shadows_what(
     monkeypatch.chdir(repo)
 
     main(["pipelines"])
+    lines = [row for row in capsys.readouterr().out.splitlines() if row.strip()]
+    assert len(lines) == 3, lines
+    assert [row.split()[-1] for row in lines] == ["global", "global", "local"]
+    assert [row.split()[0] for row in lines] == ["dev", "quick", "dev"], "global first, then local"
+    assert str(repo / ".sf" / "pipelines" / "dev.yaml") in lines[-1], "and where it came from"
+
+    main(["pipelines", "--detailed"])
     out = capsys.readouterr().out
     assert "global" in out and str(installation / "pipelines") in out
     assert "local" in out and str(repo / ".sf" / "pipelines") in out
@@ -1149,13 +1156,6 @@ def test_pipelines_lists_both_tiers_and_what_shadows_what(
     assert "dev v1" in out and "quick v1" in out
     assert "shadowed by local:dev" in out and "shadows global:dev" in out
     assert "shadowed by local:quick" not in out, "only a name that is in both tiers"
-
-    main(["pipelines", "--tabular"])
-    lines = [row for row in capsys.readouterr().out.splitlines() if row.strip()]
-    assert len(lines) == 3, lines
-    assert [row.split()[-1] for row in lines] == ["global", "global", "local"]
-    assert [row.split()[0] for row in lines] == ["dev", "quick", "dev"], "global first, then local"
-    assert str(repo / ".sf" / "pipelines" / "dev.yaml") in lines[-1], "and where it came from"
 
     main(["pipelines", "--json"])
     rows = json.loads(capsys.readouterr().out)

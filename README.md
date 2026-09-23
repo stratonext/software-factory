@@ -269,7 +269,7 @@ sf status                   # what is in flight, across every repo (--detailed f
 sf show 1                   # full state of one request
 sf replay 1                 # play a run back (--step, --json)
 sf config                   # the settings in effect, and where they would be changed
-sf pipelines                # every pipeline the factory can see (--tabular for one line each)
+sf pipelines                # every pipeline the factory can see (--detailed for the block form)
 sf runners                  # every runner a step can use, and whether it is installed
 sf pause 1 2                 # pull queued requests back out; `sf run <id>` resumes one
 sf cancel 1 2               # stop requests now; `sf run <id>` picks one back up
