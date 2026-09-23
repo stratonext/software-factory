@@ -753,7 +753,8 @@ def _stage_label(item, settings, cache, bar=False):
     else:
         # The count is what is behind the request, not what it is about to do: a queued
         # request has not worked the stage it is sitting at, so a new one reads `plan 0/5`.
-        at = rank if item["status"] == "queued" else rank + 1
+        # `paused` is the same position held back from the queue, not a stage it ran.
+        at = rank if item["status"] in ("queued", "paused") else rank + 1
     # The step's own `name:` when it declared one - it is the label a person wrote for
     # this station, and the key is only ever the thing that routes.
     shown = pipe.label(item["stage"]) if item["stage"] in pipe.steps else item["stage"]

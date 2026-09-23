@@ -140,7 +140,9 @@ def test_submit_run_queues_and_works_it_in_one_command(installation, tmp_path, m
 
 
 def test_submit_paused_stays_out_of_the_queue(installation, tmp_path, monkeypatch, capsys):
-    repo = a_repo(tmp_path / "myproject")
+    from software_factory.__main__ import _bar
+
+    repo = a_repo(tmp_path / "myproject")  # one step, "a"
     monkeypatch.chdir(repo)
     assert main(["submit", "--description", "a thing", "--name", "a-thing", "--paused"]) == 0
     item_id = _id(capsys)
@@ -148,6 +150,11 @@ def test_submit_paused_stays_out_of_the_queue(installation, tmp_path, monkeypatc
     backend = LocalBackend(installation / "state", installation / "worktrees")
     assert backend.load(item_id)["status"] == "paused"
     assert engine.queued(backend) == [], "a paused request is not queued"
+
+    capsys.readouterr()
+    main(["status"])
+    assert "a %s0/1" % _bar(0, 1) in capsys.readouterr().out, \
+        "paused is held back, not worked - same 0/1 a queued request reads"
 
     assert main(["submit", "--description", "x", "--name", "x", "--paused", "--run"]) == 1
     assert "contradict" in capsys.readouterr().err

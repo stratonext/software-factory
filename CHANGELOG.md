@@ -40,6 +40,9 @@ All notable changes to this project are documented here. The format is
   with every worker already spent elsewhere - a daemon, or a second `sf run` - blowing past
   the configured `concurrency`. It now goes back to `queued` and waits its turn like
   anything else in the line.
+- A `paused` request's STAGE bar read as fully worked (`a ████████ 1/1`) though it had
+  never run - the bar only knew `queued` meant "not yet", so anything else, `paused`
+  included, read as "already past this stage". It now reads `0/1`, same as `queued`.
 
 ## [0.0.2] - 2026-09-21
 
