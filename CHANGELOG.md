@@ -24,6 +24,10 @@ All notable changes to this project are documented here. The format is
 - `docs/pipeline-schema.yaml`'s `$id` is now its published raw GitHub URL, so any pipeline
   file - in this repo or any other - can point a `# yaml-language-server: $schema=` comment
   at it directly, not only at a relative path that only resolves inside this checkout.
+- `sf show` and `sf replay` now say what a running request is actually doing: which step,
+  since when, and under which pid, instead of the step being invisible until it lands in
+  history. `sf replay <id> --step N` on the step in flight reports the same rather than
+  "no step N" - artifacts land once it finishes, so those still wait.
 
 ### Changed
 - The STAGE column now draws as a bar in every human view — `code ███░░░░░ 2/5`. `--json`

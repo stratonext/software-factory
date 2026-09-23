@@ -1,5 +1,6 @@
 """sf - submit requests, run the factory, inspect what is in flight."""
 
+import calendar
 import contextlib
 import json
 import os
@@ -1173,6 +1174,16 @@ def show(
                   ("cost", _cost(r["cost_usd"])), ("started", item.get("started", "")),
                   ("ended", item.get("ended", ""))]))
     out.print(kv([("workspace", item.get("workspace", ""))]))
+    running = item.get("running_step")
+    if running:
+        # Live, not history: nothing here comes from a completed step, so it says so
+        # separately rather than pretending to be one.
+        pid = _running_pid(item.get("workspace", ""))
+        out.print(kv([
+            ("running", "step %d: %s (%s)" % (running["step"],
+             running.get("label") or running["stage"], running["kind"])),
+            ("pid", pid or "-"), ("elapsed", _duration(_elapsed(running["started"]))),
+        ]))
     out.print("\n  %s" % escape(item["request"]))
     for n in item["notes"]:
         out.print(kv([("note", "[%s] %s" % (n["stage"], _clip(" ".join(n["text"].split()), 150)))]))
@@ -1208,7 +1219,11 @@ def _route(item):
     """The path actually taken, rework loops and all."""
     history = item["history"]
     if not history:
-        return "(not started)"
+        # A first step already in flight has started, whatever an empty history says on
+        # its own - the running row below makes the same claim, and this must not
+        # contradict it.
+        running = item.get("running_step")
+        return "%s  [running]" % running["stage"] if running else "(not started)"
     # Every step but the last carries its own separator, halts included: history is
     # cumulative across runs, so a halted step with nothing after it would have the
     # next run's stage concatenated straight onto its name.
@@ -1238,6 +1253,11 @@ def replay(
     if step is not None:  # not truthiness: `--step 0` must say there is no step 0
         matches = [h for h in history if h["step"] == step]
         if not matches:
+            running = item.get("running_step")
+            if running and running["step"] == step:
+                if artifact:
+                    fail("step %d is still running - artifacts land once it finishes" % step)
+                return _replay_running_step(item, running)
             fail("no step %d in %s (%d steps)" % (step, id, len(history)))
         return _replay_step(backend, item, matches[0], artifact)
 
@@ -1260,6 +1280,7 @@ def replay(
                 },
                 "notes": item["notes"],
                 "steps": history,
+                "running_step": item.get("running_step"),
             }
         )
         return
@@ -1298,6 +1319,16 @@ def replay(
             out.print("       [dim]%s[/]" % escape(notes[:150] + ("..." if len(notes) > 150 else "")))
         if h.get("artifacts"):
             out.print("       [dim]%s[/]" % escape(" - ".join(sorted(h["artifacts"]))))
+    running = item.get("running_step")
+    if running:
+        pid = _running_pid(item.get("workspace", ""))
+        out.print(
+            "  #%-3d %-10s %-8s %-7s %s %-7s %6s"
+            % (running["step"], escape(running.get("label") or running["stage"]),
+               escape(running["kind"]), _how(running),
+               "[cyan]running[/]", _cost(None), _duration(_elapsed(running["started"])))
+        )
+        out.print("       [dim]pid %s - still running[/]" % (pid or "?"))
     out.print("\n  [dim]sf replay %s --step N   to open one up[/]" % item["id"])
 
 
@@ -1331,6 +1362,19 @@ def _replay_step(backend, item, h, only):
     if not only and rest:
         # The ones this did not just print - "other" has to mean other.
         out.print("[dim]other artifacts: %s[/]" % escape(" ".join(rest)))
+
+
+def _replay_running_step(item, running):
+    """What there is to say about a step still in flight - no history entry, no
+    artifacts, since none of that lands until the step finishes."""
+    pid = _running_pid(item.get("workspace", ""))
+    out.print("[bold]# %s step %d: %s (%s) -> still running[/]\n" % (
+        item["id"], running["step"], escape(running.get("label") or running["stage"]),
+        escape(running["kind"])))
+    out.print(kv([("uses", running.get("uses", "")), ("pid", pid or "-"),
+                  ("started", running["started"]),
+                  ("elapsed", _duration(_elapsed(running["started"])))]))
+    out.print("\n  [dim]sf cancel %s   to stop it[/]" % item["id"])
 
 
 @app.command()
@@ -1760,17 +1804,36 @@ def main(argv=None):
     return 0
 
 
+def _running_pid(workspace):
+    """The pid of the step in flight, or None - finished, or nothing ever started.
+
+    Local-only, like `_kill_step` below: the pid file lives on whatever machine ran the
+    step, which today is always this one.
+    """
+    try:
+        return int((Path(workspace) / steps.SCRATCH / steps.PID_FILE).read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def _elapsed(started):
+    """Seconds since a `now()` timestamp - `calendar.timegm` undoes its own `gmtime`."""
+    return time.time() - calendar.timegm(time.strptime(started, "%Y-%m-%dT%H:%M:%SZ"))
+
+
 def _kill_step(workspace):
     """SIGTERM the running step's process group - `claude` and everything it spawned.
 
     ponytail: no SIGKILL escalation. A step that ignores SIGTERM still has the engine's
     step timeout above it, and the item is already cancelled on disk either way.
     """
+    pid = _running_pid(workspace)
+    if pid is None:
+        return  # no step in flight, or it finished between the save and here
     try:
-        pid = int((Path(workspace) / steps.SCRATCH / steps.PID_FILE).read_text())
         os.killpg(pid, signal.SIGTERM)
-    except (OSError, ValueError):
-        pass  # no step in flight, or it finished between the save and here
+    except OSError:
+        pass
 
 
 if __name__ == "__main__":

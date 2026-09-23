@@ -454,6 +454,42 @@ def test_cancel_kills_the_running_step(tmp_path):
     assert not pid_file.exists(), "the pid file outlived the step"
 
 
+def test_show_and_replay_report_a_step_in_flight(tmp_path, capsys):
+    """A running step is not a black box until it finishes: `sf show` and `sf replay`
+    both have to say what is running, since when, and under which pid - not just that
+    the request is `running`, and not nothing at all until history has an entry for it."""
+    backend, pipelines = build(tmp_path, steps={"a": sh("sleep 30", next="done")})
+    backend.create("r", "t", "a")
+    walker = threading.Thread(target=engine.run, args=(backend, pipelines), daemon=True)
+    walker.start()
+    pid = int(_await_step(tmp_path, "1").read_text())
+
+    cli = ["--backend", str(tmp_path / "state"), "--worktrees", str(tmp_path / "worktrees"),
+           "--pipelines", pipelines]
+    try:
+        capsys.readouterr()
+        assert main(cli + ["show", "1"]) == 0
+        out = capsys.readouterr().out
+        assert "running: step 1: a (command)" in out and "pid: %d" % pid in out
+
+        capsys.readouterr()
+        assert main(cli + ["replay", "1"]) == 0
+        out = capsys.readouterr().out
+        assert "#1" in out and "running" in out and "pid %d" % pid in out
+        assert "a  [running]" in out, "the route line says something has started too"
+
+        capsys.readouterr()
+        assert main(cli + ["replay", "1", "--step", "1"]) == 0
+        out = capsys.readouterr().out
+        assert "still running" in out and "pid: %d" % pid in out
+
+        assert main(cli + ["replay", "1", "--step", "1", "--artifact", "output.txt"]) == 1
+        assert "still running" in capsys.readouterr().err
+    finally:
+        main(cli + ["cancel", "1"])
+        walker.join(timeout=10)
+
+
 def test_cancel_reaches_an_item_waiting_in_the_backlog(tmp_path):
     """An item queued behind a busy pool: claiming it must not overwrite the cancel."""
     backend, pipelines = build(tmp_path, steps={"a": sh("sleep 30", next="done")})

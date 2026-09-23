@@ -122,6 +122,16 @@ def _walk(backend, pipe, item, step_timeout, agent_attempts, retry_wait, max_inp
 
         kind, with_, env = pipe.kind(stage), pipe.options(stage), pipe.environ(stage)
         effort = _effort(item, step, kind)
+        # Recorded before the blocking call, not after: this is what lets `sf show` and
+        # `sf replay` say what is in flight and since when, rather than nothing at all
+        # until the step lands in history. Popped the moment the call returns, a few
+        # lines down, so a finished step is never shadowed by its own stale marker.
+        item["running_step"] = {
+            "step": step_no, "stage": stage, "kind": kind,
+            "label": step.get("name", ""), "uses": pipe.runners[stage]["name"],
+            "started": started,
+        }
+        backend.save(item)
         if kind == "judge":
             # ponytail: dispatched on the kind, not on the runner's name - there is one
             # judge implementation. The day there is a second, the kind gets a name again.
@@ -140,6 +150,7 @@ def _walk(backend, pipe, item, step_timeout, agent_attempts, retry_wait, max_inp
                 agent_attempts, retry_wait,
             )
 
+        item.pop("running_step", None)
         # The step's output becomes a file later steps can declare as their input, and
         # a per-pass artifact, so every revision of a plan or a review stays inspectable.
         if step.get("output"):

@@ -272,8 +272,8 @@ sf daemon start              # keep working the queue as requests land (--interv
 sf daemon status             # is a background engine running?
 sf daemon stop                # stop it; steps already in flight keep going
 sf status                   # what is in flight, across every repo (--detailed for the block form, --monitor to watch it)
-sf show 1                   # full state of one request
-sf replay 1                 # play a run back (--step, --json)
+sf show 1                   # full state of one request - a step in flight shows its pid and elapsed time
+sf replay 1                 # play a run back (--step, --json) - the in-flight step shows too, not just finished ones
 sf config                   # the settings in effect, and where they would be changed
 sf pipelines                # every pipeline the factory can see (--detailed for the block form)
 sf runners                  # every runner a step can use, and whether it is installed

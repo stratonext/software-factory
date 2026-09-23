@@ -34,8 +34,8 @@ daemon serves every image. Requests outlive your shell: submit here, ask from an
 | `sf daemon start` | leave an engine running that keeps working the queue as requests land, polling every `--interval` seconds (default 5) under the same `--concurrency` quota `sf run` uses. `sf daemon status` / `sf daemon stop` |
 | `sf` / `sf status` | every request across every repo — the `docker ps` of the factory: one line per request, a table you can `| grep`. `-d`/`--detailed` is the fuller block form, with each request's text. `-m`/`--monitor` keeps the table on screen and refreshes it once a second until Ctrl-C — a terminal only, so never yours: poll `sf status` instead |
 | any command | **you get JSON**: output is JSON whenever stdout is not a terminal, which it never is for you. `--json` says so explicitly; `SF_OUTPUT=human` gets the text form |
-| `sf show <id>` | the raw item JSON (pipe to `jq`) |
-| `sf replay <id>` | play the run back: every step, its route, cost, artifacts. `--step N` opens one up, `--artifact <name>` picks one out, `--json` is the flattened timeline |
+| `sf show <id>` | the raw item JSON (pipe to `jq`). `running`: while a step is in flight, its stage, pid and elapsed time |
+| `sf replay <id>` | play the run back: every step, its route, cost, artifacts. `--step N` opens one up, `--artifact <name>` picks one out, `--json` is the flattened timeline. A step still in flight shows too - pid and elapsed, not artifacts yet - `--step N` on it says so instead of "no step N" |
 | `sf pipelines` | every pipeline the factory can see: one padded line each — name, file, flavor. Says which file a bare `--pipeline <name>` reaches when the name is in both tiers. `-d`/`--detailed` is a block per pipeline with its path and description |
 | `sf runners` | every runner a step can `uses:`, whether its binary is on PATH, and what it supports |
 | `sf run <id> --note "..."` | answer a parked request; resumes from `item.stage` with your note in context |
