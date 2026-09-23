@@ -6,12 +6,15 @@ All notable changes to this project are documented here. The format is
 
 ## [Unreleased]
 
+## [0.0.3rc1] - 2026-09-23
+
 ### Added
 - Qualified pipeline names: `--pipeline local:<name>` / `global:<name>` pick a tier when a
   name exists in both; a bare name still tries repo then global. Recorded on the request,
   so `sf status` and the run agree on which file it means.
 - `sf pipelines`: every pipeline the factory can see, both tiers, marking which name
-  shadows which. Default is one line each; `-d`/`--detailed` adds version and description.
+  shadows which, whether it loads and how many steps it has. Default is one line each;
+  `-d`/`--detailed` adds version, description and load status.
 - `sf reset <ids>`: send a request back to its pipeline's `start` to rework it from
   scratch — passes and notes cleared, history and worktree kept. Refuses a `running`
   request; asks `y/N` first (`--yes` to skip).
@@ -38,6 +41,8 @@ All notable changes to this project are documented here. The format is
 - `sf run` now starts an engine in the background and returns at once by default, the same
   shape `sf daemon` already has; `--wait` is the opt-in form that blocks until the queue is
   worked (what gates CI). Replaces `--detach`, which was the opt-in the other way round.
+- `sf doctor` no longer lists each pipeline's version, step count and load errors - just how
+  many live in the default path. That detail moved to `sf pipelines`, in both views.
 
 ### Fixed
 - Unparking a request (`sf run <id>`, e.g. after `sf pause`) could run it immediately even
