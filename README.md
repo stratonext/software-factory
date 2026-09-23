@@ -108,6 +108,23 @@ can run at once without stepping on each other or on what you are editing. As se
 
 > Add a shell git node to automate the commit process.
 
+## Running as a daemon
+
+`sf run` works whatever is queued and returns. For a machine you leave running - so a
+request lands and starts without anyone typing `sf run` - start the daemon instead:
+
+```bash
+sf daemon start     # polls every 5s and works whatever is queued, under the concurrency quota `sf run` uses
+sf daemon status    # is it running, and its pid
+sf daemon stop      # SIGTERM; a step already in flight keeps going - `sf cancel <id>` is what kills that
+```
+
+It is `sf run` in a loop, nothing more: `--interval` changes the poll period, `--concurrency`
+the quota, `--repo` narrows it to one repo's requests. `sf daemon start` prints the log path
+(`~/.sf/state/daemon.log` by default) to `tail -f`. A request submitted with `sf submit
+--paused`, or pulled back out with `sf pause <id>`, sits out until you `sf run <id>` it
+yourself - the daemon never touches it.
+
 ## Driving the factory with an agent
 
 The factory is a CLI, so the thing best placed to operate it is another agent. `sf` ships
