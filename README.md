@@ -27,14 +27,13 @@ The goal is simple: **bring the basic ideas of a software factory to your local 
 
 ## Install
 
-`sf` is one global command for all your repos, like `docker`. Install it once:
+`sf` is one global command for all your repos. Install it once:
 
 ```bash
-uv tool install software-factory     # or: pipx install software-factory
+uv tool install software-factory
 ```
 
-Then create the installation — `~/.sf`, a starter `config.yaml` and the directories the
-factory uses:
+Create the initial configuration with:
 
 ```bash
 sf init
@@ -91,8 +90,8 @@ fills in the work.
 Submit **from inside the repo**:
 
 ```bash
-sf submit --description "add rate limiting to /upload" --name rate-limit --pipeline quick   # -> id 1
-sf run                                                     # work everything that is queued
+sf submit --description "add rate limiting to /upload" --name rate-limit --pipeline quick
+sf run                                                  
 ```
 
 And from anywhere, to see what is happening:
@@ -105,12 +104,14 @@ sf replay 1        # play the run back: every step, its route, its artifacts
 ```
 
 Each request works in its own git worktree under `~/.sf/worktrees/<repo>/<id>/`, so several
-can run at once without stepping on each other or on what you are editing.
+can run at once without stepping on each other or on what you are editing. As separated worktrees, once they have finished you have to commit the work and merge it into your main branch (`git merge sf/<number>`).
+
+> Add a shell git node to automate the commit process.
 
 ## Driving the factory with an agent
 
 The factory is a CLI, so the thing best placed to operate it is another agent. `sf` ships
-with a skill that teaches one how — every command, the verdicts, how to answer a parked
+with a skill that teaches one how every command, the verdicts, how to answer a parked
 request, and the shape of a pipeline file:
 
 Load the skill in the agent (`--skill`), then ask it to break the work up and queue it:
@@ -136,7 +137,7 @@ not the worker: each request it queues is worked by its own agent, in its own gi
 on its own branch, several at a time, and none of them can touch the tree you are editing.
 One conversation turns into a queue of parallel work you can watch, interrupt, and replay —
 `sf cancel` stops it, and the foreman is never the one grading its own diff, because the
-pipeline decides that with a test run or a [Jev judgment](#judging-with-jev).
+pipeline decides that with a test run or a [Jev judgment](docs/judging.md).
 
 ## Writing a pipeline
 
@@ -154,7 +155,7 @@ built in:
 |---|---|
 | `claude` | Claude Code, non-interactive. `with: {prompt:, effort:, model:}` |
 | `shell` | an ordinary command. `with: {run:}` |
-| `typesafe` | a typed judgment instead of an agent — see [Judging with Jev](#judging-with-jev) below. `with: {questions:}` |
+| `typesafe` | a typed judgment instead of an agent — see [Judging with Jev](docs/judging.md). `with: {questions:}` |
 
 `sf runners` lists every runner a step can name, whether its binary is on PATH, and what
 each one supports. Adding one is a YAML file too, so a stage can run a different agent CLI.
@@ -170,29 +171,6 @@ with a first line:
 ```yaml
 # yaml-language-server: $schema=https://raw.githubusercontent.com/stratonext/software-factory/main/docs/pipeline-schema.yaml
 ```
-
-## Judging with Jev
-
-`typesafe` is the third built-in runner, and the one that is not an agent. A step that
-`uses: typesafe` sends the diff as **state**, asks typed questions you wrote, and gets a
-probability, a position on a scale or a choice back from [TypeSafe](https://typesafe.ai)'s
-System One model, **Jev** — so a pipeline routes on data with thresholds you declare, rather
-than an agent's prose. A judgment costs about **$0.0002** against **$1–2** for a review
-agent, so it pays for itself the first time it filters a diff before the expensive reviewer
-sees it.
-
-It is **opt-in and off by default**: it needs `TYPESAFE_API_KEY`, and without one nothing
-here is reached — submit behaves exactly as it always did. A step that does name this runner
-and cannot ask — no key, an HTTP error, a question left unanswered — returns `human` and
-parks the request rather than guessing.
-
-The same model can also pick the process for you: `--pipeline auto` and `--effort auto` ask
-it which pipeline a request belongs in and how hard the agent should think, before anything
-is queued, and flag a request too vague for anyone to start on.
-
-[`docs/pipelines.md`](docs/pipelines.md#the-third-kind-of-stage-judge) has the whole shape —
-question types, thresholds, the `typesafe:` config block — and
-[`examples/secret-gate.yaml`](examples/secret-gate.yaml) is a working gate to copy.
 
 ## Commands
 
