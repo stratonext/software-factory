@@ -54,6 +54,7 @@ The first thing to do is to write a pipeline. Put it in `~/.sf/pipelines/` and e
 mkdir -p ~/.sf/pipelines/prompts
 
 cat > ~/.sf/pipelines/quick.yaml <<'YAML'
+# yaml-language-server: $schema=https://raw.githubusercontent.com/stratonext/software-factory/main/docs/pipeline-schema.yaml
 name: quick
 description: Implement the request with Claude Code, then commit it.
 start: code
