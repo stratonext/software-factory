@@ -2,6 +2,9 @@
 
 Maintained by [StratoNext](https://www.stratonext.ai).
 
+[![CI](https://github.com/stratonext/software-factory/actions/workflows/ci.yml/badge.svg)](https://github.com/stratonext/software-factory/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/software-factory.svg)](https://pypi.org/project/software-factory/)
+[![License: MIT](https://img.shields.io/pypi/l/software-factory.svg)](LICENSE)
 [![Listed in Awesome Jev](https://awesomejev.vercel.app/badge.svg)](https://awesomejev.vercel.app)
 
 # Local Software Factory
@@ -24,14 +27,13 @@ The goal is simple: **bring the basic ideas of a software factory to your local 
 
 ## Install
 
-`sf` is one global command for all your repos, like `docker`. Install it once:
+`sf` is one global command for all your repos. Install it once:
 
 ```bash
-uv tool install software-factory     # or: pipx install software-factory
+uv tool install software-factory
 ```
 
-Then create the installation — `~/.sf`, a starter `config.yaml` and the directories the
-factory uses:
+Create the initial configuration with:
 
 ```bash
 sf init
@@ -88,8 +90,8 @@ fills in the work.
 Submit **from inside the repo**:
 
 ```bash
-sf submit --description "add rate limiting to /upload" --name rate-limit --pipeline quick   # -> id 1
-sf run                                                     # work everything that is queued
+sf submit --description "add rate limiting to /upload" --name rate-limit --pipeline quick
+sf run                                                  
 ```
 
 And from anywhere, to see what is happening:
@@ -102,12 +104,31 @@ sf replay 1        # play the run back: every step, its route, its artifacts
 ```
 
 Each request works in its own git worktree under `~/.sf/worktrees/<repo>/<id>/`, so several
-can run at once without stepping on each other or on what you are editing.
+can run at once without stepping on each other or on what you are editing. As separated worktrees, once they have finished you have to commit the work and merge it into your main branch (`git merge sf/<number>`).
+
+> Add a shell git node to automate the commit process.
+
+## Running as a daemon
+
+`sf run` works whatever is queued and returns. For a machine you leave running - so a
+request lands and starts without anyone typing `sf run` - start the daemon instead:
+
+```bash
+sf daemon start     # polls every 5s and works whatever is queued, under the concurrency quota `sf run` uses
+sf daemon status    # is it running, and its pid
+sf daemon stop      # SIGTERM; a step already in flight keeps going - `sf cancel <id>` is what kills that
+```
+
+It is `sf run` in a loop, nothing more: `--interval` changes the poll period, `--concurrency`
+the quota, `--repo` narrows it to one repo's requests. `sf daemon start` prints the log path
+(`~/.sf/state/daemon.log` by default) to `tail -f`. A request submitted with `sf submit
+--paused`, or pulled back out with `sf pause <id>`, sits out until you `sf run <id>` it
+yourself - the daemon never touches it.
 
 ## Driving the factory with an agent
 
 The factory is a CLI, so the thing best placed to operate it is another agent. `sf` ships
-with a skill that teaches one how — every command, the verdicts, how to answer a parked
+with a skill that teaches one how every command, the verdicts, how to answer a parked
 request, and the shape of a pipeline file:
 
 Load the skill in the agent (`--skill`), then ask it to break the work up and queue it:
@@ -133,48 +154,15 @@ not the worker: each request it queues is worked by its own agent, in its own gi
 on its own branch, several at a time, and none of them can touch the tree you are editing.
 One conversation turns into a queue of parallel work you can watch, interrupt, and replay —
 `sf cancel` stops it, and the foreman is never the one grading its own diff, because the
-pipeline decides that with a test run or a [Jev judgment](#judging-with-jev).
+pipeline decides that with a test run or a [Jev judgment](docs/judging.md).
 
 ## Writing a pipeline
 
 A pipeline is a YAML file in the repo's own `.sf/pipelines/<name>.yaml`, or in
 `~/.sf/pipelines/` for every repo. The repo's own copy wins, so two repos can both have a
-`dev` pipeline and mean different processes.
-
-`sf pipelines` lists both tiers, and says which file a bare `--pipeline dev` would reach
-when the name exists in both. To say which one you mean, qualify it: `--pipeline local:dev`
-searches only the repo's own directory, `--pipeline global:dev` only `~/.sf/pipelines`. The
-qualifier is recorded on the request, so `sf status` shows `local:dev` and the run resolves
-the file that was submitted against.
-
-The Quickstart's `quick` is about as small as one gets. Here is the next step up — implement,
-test, and send the work back to the coder if the tests fail:
-
-```yaml
-name: dev
-description: Implement a change, and only keep it if the tests pass.
-start: code            # which step a new request enters; defaults to the first
-max_passes: 2          # rework round-trips before a human is asked instead
-
-steps:
-  code:
-    uses: claude                    # which runner performs this step
-    with:
-      prompt: prompts/code.md       # prompt file, relative to this pipeline
-    next: test                      # unconditional edge
-
-  test:
-    uses: shell
-    with:
-      run: "pytest -q"              # exit 0 = pass, anything else = fail
-    on: { pass: done, fail: code }  # a backwards edge is rework, and costs one pass
-```
-
-Submit against it with `sf submit --description "..." --pipeline dev` — the name is the file's, so
-`dev.yaml` is `--pipeline dev`. `~/.sf/pipelines/` serves every repo; a `.sf/pipelines/` in a
-repo wins over it, which is how one repo keeps a process of its own. [`examples/`](examples/)
-has four more to copy: implement-and-commit, the full reviewed line, a judged secret
-gate, and one that opens the pull request.
+`dev` pipeline and mean different processes; `sf pipelines` lists both tiers and says which
+file a bare `--pipeline dev` reaches when the name exists in both (qualify it with
+`--pipeline local:dev` / `global:dev` to pick one).
 
 A step says **who performs it** (`uses:`) and **what to hand them** (`with:`), and needs at
 least one of `next:` or `on:`. `done` is the implicit terminal stage. Three runners ship
@@ -184,83 +172,22 @@ built in:
 |---|---|
 | `claude` | Claude Code, non-interactive. `with: {prompt:, effort:, model:}` |
 | `shell` | an ordinary command. `with: {run:}` |
-| `typesafe` | a typed judgment instead of an agent. `with: {questions:}` |
+| `typesafe` | a typed judgment instead of an agent — see [Judging with Jev](docs/judging.md). `with: {questions:}` |
 
 `sf runners` lists every runner a step can name, whether its binary is on PATH, and what
 each one supports. Adding one is a YAML file too, so a stage can run a different agent CLI.
 
-Everything a pipeline can say — `input:`, `output:`, `review:` gates, judge steps,
-concurrency, costs — is in [`docs/pipelines.md`](docs/pipelines.md), and
-[`docs/pipeline-schema.yaml`](docs/pipeline-schema.yaml) is the annotated schema your editor
-can use for completion. Point at it from any pipeline file, in this repo or any other, with
-a first line:
+[`examples/`](examples/) has four pipelines to copy: implement-and-commit, the full reviewed
+line with rework, a judged secret gate, and one that opens the pull request. For everything
+else a pipeline can say — `input:`/`output:`, `review:` gates, judge steps, concurrency,
+sessions, cost — see **[`docs/pipelines.md`](docs/pipelines.md)**, the full reference, and
+**[`docs/pipeline-schema.yaml`](docs/pipeline-schema.yaml)**, the annotated JSON Schema your
+editor can use for completion. Point at it from any pipeline file, in this repo or any other,
+with a first line:
 
 ```yaml
 # yaml-language-server: $schema=https://raw.githubusercontent.com/stratonext/software-factory/main/docs/pipeline-schema.yaml
 ```
-
-## Judging with Jev
-
-`typesafe` is the third built-in runner, and the one that is not an agent. A step that
-`uses: typesafe` sends the diff and the scratch files as **state**, asks the typed questions
-you wrote, and gets typed answers back from [TypeSafe](https://typesafe.ai)'s System One
-model, **Jev** — a probability, a position on an ordered scale, one of a set of choices. The
-pipeline routes on those numbers with thresholds you declare, so the decision is data rather
-than an agent's prose.
-
-```yaml
-  gate:
-    uses: typesafe
-    with:
-      questions: prompts/review-gate.yaml   # the questions and the routing, beside the prompts
-    input: [plan.md]
-    output: gate.md
-    on: { pass: review, fail: code }        # a cheap filter before the expensive reviewer
-```
-
-```yaml
-# prompts/review-gate.yaml
-state:      { diff: "git diff" }          # shell commands; stdout becomes a named state field
-questions:
-  secret: { type: noul, instructions: "`diff` hardcodes a credential, key, token or password." }
-  scope:  { type: score, instructions: "How far does `diff` go beyond `request`?",
-            criteria: ["exactly the request", "small extras", "large unrelated changes"] }
-route:                                     # first match wins; a rule with no `when` is default
-  - { when: secret, above: $secret, verdict: human, notes: "possible hardcoded credential" }
-  - { when: scope,  above: 0.8,     verdict: fail,  notes: "goes well beyond the request" }
-  - { verdict: pass }
-```
-
-Why bother, when an agent could be asked the same thing in English: a judgment costs about
-**$0.0002** where a review agent costs **$1–2**, it answers in milliseconds, and it is not
-the worker grading its own work. The notes the factory records carry the number that fired —
-`secret 0.71 > 0.5 - possible hardcoded credential` — so a verdict can be argued with. Use it
-as a gate in front of the expensive stages, not as a replacement for them.
-
-`above: $secret` reads `typesafe.thresholds.secret` from `~/.sf/config.yaml`, so a gate that
-turns out to be too eager is one edit for every pipeline that uses it; a rule that writes a
-literal still wins. A `$name` the config does not define parks the request rather than being
-read as zero.
-
-The same model can also pick the process for you. `--pipeline auto` and `--effort auto` ask
-Jev which pipeline a request belongs in and how hard the agent should think, in one call
-before anything is queued, and flag a request too vague for anyone to start on:
-
-```bash
-sf submit --description "the upload endpoint 500s on files over 2MB" --pipeline auto --effort auto
-```
-
-All of it is **opt-in and off by default**: it needs `TYPESAFE_API_KEY`, and without one
-nothing here is reached — submit behaves exactly as it always did. A step that *does* name
-this runner and cannot ask — no key, an HTTP error, a rule about a question that was not
-answered — returns `human` and parks the request. The factory never guesses a verdict, and a
-service it could not reach is a decision nobody made.
-
-The questions are fixed by the pipeline author, and only the diff and the scratch files
-arrive as state. That separation is deliberate: an agent wrote the diff, so the diff is not
-trusted input, and it must never be able to reach the model as an instruction.
-[`docs/pipelines.md`](docs/pipelines.md) has the whole shape, question types included.
-
 
 ## Commands
 

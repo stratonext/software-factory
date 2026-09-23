@@ -127,7 +127,13 @@ name one tier each, and the qualifier is kept on the request, so `sf status` sho
 `local:dev` and the run resolves the same file. `local:` on a request with no repo is an
 error, never a quiet fall back to the global file.
 
+Every pipeline you write should open with the schema line below - it is the annotated JSON
+Schema for every key this section only summarizes (`judge_file` question types, `resume:`,
+the `_FACTORY/` name rules), and it is what an editor or a WebFetch on the URL validates
+against before the loader ever runs:
+
 ```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/stratonext/software-factory/main/docs/pipeline-schema.yaml
 name: dev
 max_passes: 3          # rework round-trips before a human is asked
 start: plan            # defaults to the first step
@@ -187,5 +193,6 @@ Rules the loader enforces:
   rerun it by hand, `--artifact command.txt` for an agent step, `--artifact input.sh` for a
   `uses: shell` one. Ask for an artifact the step never wrote and replay prints nothing.
 
-Depth lives in the software-factory repo's own `README.md` (YAML and command reference) and
-its `docs/` directory (why it works this way).
+Depth lives in the software-factory repo's own `README.md` (YAML and command reference), its
+`docs/` directory (why it works this way), and `docs/pipeline-schema.yaml` (the full field
+list, as a JSON Schema, at the URL in the example above).
