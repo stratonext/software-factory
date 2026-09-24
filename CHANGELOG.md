@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format is
 
 ## [Unreleased]
 
+### Changed
+- `sf doctor` always reports whether `TYPESAFE_API_KEY` is set, instead of only when a
+  judged pipeline or `triage: true` is present. Still non-essential (won't fail the
+  command) unless something actually needs the key.
+
+### Removed
+- `sf submit --force` and `--effort`. A request triage reads as too vague now always
+  blocks submission, with no override; per-item effort selection is still available
+  automatically via `triage: true` in the config, just not as a per-submit CLI flag.
+
 ## [0.0.3] - 2026-09-23
 
 Promoted 0.0.3rc1 to 0.0.3

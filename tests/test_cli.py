@@ -997,7 +997,11 @@ def test_doctor_names_what_is_missing_and_exits_non_zero(installation, tmp_path,
     report = capsys.readouterr().out
     assert "claude setup-token" in report, "it says what to do, not just what is wrong"
     assert "pipelines" in report
-    assert "TYPESAFE_API_KEY" not in report, "nothing here judges: the key is not needed"
+    assert "TYPESAFE_API_KEY" in report, "always shown, whether or not anything judges"
+    main(["doctor", "--json"])
+    checks = json.loads(capsys.readouterr().out)
+    typesafe_check = next(c for c in checks if c["check"] == "TYPESAFE_API_KEY")
+    assert typesafe_check["ok"] and not typesafe_check["essential"], "nothing here judges: not required"
 
     judging = tmp_path / "judging"
     judging.mkdir()
