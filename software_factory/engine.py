@@ -27,6 +27,31 @@ def queued(backend, ids=None, repo=None):
     return items
 
 
+# done/failed/cancelled are the terminal states a dependency can settle into; the rest
+# (queued/running/needs_human/paused) can all still become done, so a dependent keeps
+# waiting rather than giving up on them.
+_DEPENDENCY_DEAD = ("failed", "cancelled")
+
+
+def _dependency_state(backend, item):
+    """"ready" to run, or ("waiting"|"blocked", dep_id) naming what's in the way.
+
+    Ids are handed out sequentially and a dependency must already exist to be named
+    (`sf submit` validates that), so a cycle - or self-dependency - cannot occur here;
+    no cycle detection is needed.
+    """
+    for dep_id in item.get("depends_on", []):
+        try:
+            dep = backend.load(dep_id)
+        except FileNotFoundError:
+            return "blocked", dep_id  # deleted out from under it - can never finish
+        if dep["status"] in _DEPENDENCY_DEAD:
+            return "blocked", dep_id
+        if dep["status"] != "done":
+            return "waiting", dep_id
+    return "ready", None
+
+
 def run(backend, pipelines_dir, concurrency=None, ids=None, repo=None, default_concurrency=2,
         step_timeout=None, agent_attempts=None, retry_wait=None, max_input=None,
         runners_dir=None, default_runner=None):
@@ -43,6 +68,13 @@ def run(backend, pipelines_dir, concurrency=None, ids=None, repo=None, default_c
         return []
     pipes, work, failed = [], [], []
     for item in items:
+        state, dep_id = _dependency_state(backend, item)
+        if state == "waiting":
+            continue  # left queued; next poll re-checks it
+        if state == "blocked":
+            failed.append(_stop(backend, item, "needs_human",
+                                 "depends_on %s: not going to finish" % dep_id))
+            continue
         # Resolved per item, not per run: two requests may name the same pipeline and
         # mean two different files, one from each repo. Runners resolve the same way.
         try:
@@ -90,7 +122,7 @@ def _walk(backend, pipe, item, step_timeout, agent_attempts, retry_wait, max_inp
         return None  # cancelled while it waited for a worker
     if not backend.claim(item):
         return None  # another engine got there first
-    workspace = backend.workspace(item["id"], item.get("repo", ""))
+    workspace = backend.workspace(item["id"], item.get("repo", ""), item.get("base"), item.get("name", ""))
     steps.ensure_scratch(workspace)
     # Recorded so `sf cancel` can find the pid file without calling `workspace()`,
     # which would create a worktree and a branch as a side effect of signalling.

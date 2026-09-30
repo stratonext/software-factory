@@ -7,6 +7,7 @@ without the engine changing.
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -21,9 +22,17 @@ def now():
 # Every state an item can be in, in lifecycle order. The engine and `sf cancel`
 # set them; `sf prune` validates what it was asked to clear against them.
 STATUSES = ("queued", "running", "done", "failed", "needs_human", "cancelled", "paused")
-# One request, one branch. Defined once because `workspace` creates it and the CLI's
-# `delete` removes it, and the two drifting apart deletes the wrong branch.
-BRANCH = "sf/%s"
+
+
+def branch_name(item_id, name=""):
+    """This request's branch: `sf/<id>`, plus a slug of its `--name` when it has one,
+    so a branch listing says what a request was for, not just which one it was.
+
+    Called from both `workspace` (which creates the branch) and the CLI's `delete`
+    (which removes it) - the two must agree, so this is the one place the format lives.
+    """
+    slug = re.sub(r"-+", "-", re.sub(r"[^a-z0-9]+", "-", name.lower())).strip("-")
+    return "sf/%s-%s" % (item_id, slug) if slug else "sf/%s" % item_id
 
 
 def _id_number(path):
@@ -50,12 +59,16 @@ class Backend(ABC):
     """
 
     @abstractmethod
-    def create(self, request, pipeline, start_stage, repo, name=""):
+    def create(self, request, pipeline, start_stage, repo, name="", depends_on=(), base=None):
         """Allocate an id and persist a new queued work item. Returns the item.
 
         ``repo`` is the git repository this request will be worked in. It belongs to
         the item, not to the factory: one installation serves many repos at once.
         ``name`` is a human label shown in listings, distinct from the generated ``id``.
+        ``depends_on`` is other requests' ids this one must not start ahead of.
+        ``base`` is the ref this request's worktree branches from - another request's own
+        ``sf/<id>`` branch, to stack one request's work on top of another's before either
+        is merged. Unset, it branches from the repo's current HEAD, as it always has.
         """
 
     @abstractmethod
@@ -75,11 +88,13 @@ class Backend(ABC):
         """Compare-and-set queued -> running. True if this caller won the race."""
 
     @abstractmethod
-    def workspace(self, item_id, repo):
+    def workspace(self, item_id, repo, base=None, name=""):
         """A local directory the agents work in. Created on first call.
 
         Worktrees are centralised rather than kept beside the item, so they can be
-        found by repo without knowing request ids.
+        found by repo without knowing request ids. ``base``, given, is the ref the
+        worktree's branch starts from instead of HEAD - see ``create``. ``name`` is
+        the request's own label, folded into the branch name via ``branch_name``.
         """
 
     @abstractmethod
@@ -138,7 +153,7 @@ class LocalBackend(Backend):
         return [json.loads(p.read_text())
                 for p in sorted(self.items.glob("*.json"), key=_id_number)]
 
-    def create(self, request, pipeline, start_stage, repo="", name=""):
+    def create(self, request, pipeline, start_stage, repo="", name="", depends_on=(), base=None):
         while True:
             # Everything under items/ is named after an id - the item, its directory,
             # its claim marker, its tombstone - so the glob is every id ever handed
@@ -166,6 +181,8 @@ class LocalBackend(Backend):
                 "created": now(),
                 "notes": [],
                 "history": [],
+                "depends_on": list(depends_on),
+                "base": base,
             }
         )
 
@@ -187,7 +204,7 @@ class LocalBackend(Backend):
         # but never a path, because request ids are unique across the installation.
         return self.worktrees / (Path(repo).name if repo else "_scratch") / item_id
 
-    def workspace(self, item_id, repo):
+    def workspace(self, item_id, repo, base=None, name=""):
         """A git worktree on its own branch, so concurrent agents never collide.
 
         Laid out as <worktrees>/<repo name>/<request id>, so everything in flight for
@@ -203,14 +220,22 @@ class LocalBackend(Backend):
         # Drop registrations whose directories are gone, so a re-created installation
         # does not collide with its own history.
         subprocess.run(["git", "-C", str(repo), "worktree", "prune"], capture_output=True)
-        # -B, not -b: create the branch or reset it to HEAD. `sf/<id>` is this
-        # request's branch, and a request id is never reused, so resetting is correct.
+        # -B, not -b: create the branch or reset it to HEAD (or `base`, if given).
+        # This request's branch, and a request id is never reused, so resetting is correct.
+        branch = branch_name(item_id, name)
         args = ["git", "-C", str(repo), "worktree", "add", "-B",
-                BRANCH % item_id, str(ws.resolve())]
+                branch, str(ws.resolve())]
+        if base:
+            args.append(base)
         if subprocess.run(args, capture_output=True, text=True).returncode != 0:
             # ponytail: fallback for a read-only or already-branched repo. Costs a copy
             # when state and the repo are different mounts; fine at PoC scale.
             subprocess.run(["git", "clone", "--local", str(repo), str(ws)], check=True, capture_output=True)
+            if base:
+                subprocess.run(
+                    ["git", "-C", str(ws), "checkout", "-B", branch, base],
+                    check=True, capture_output=True,
+                )
         return ws
 
     def write_artifact(self, item_id, step_no, slug, name, text):

@@ -46,6 +46,13 @@ def test_backend_ids_are_unpadded_and_stay_in_numeric_order(backend_impl):
     assert [i["id"] for i in backend_impl.all()] == ids
 
 
+def test_backend_create_records_depends_on(backend_impl):
+    a = backend_impl.create("do a thing", "t", "a")
+    b = backend_impl.create("do another", "t", "a", depends_on=[a["id"]])
+    assert backend_impl.load(b["id"])["depends_on"] == [a["id"]]
+    assert a["depends_on"] == [], "no dependency named, empty list rather than a missing key"
+
+
 def test_backend_workspace_is_a_local_directory(backend_impl):
     backend_impl.create("do a thing", "t", "a")
     ws = backend_impl.workspace("1", repo="")
@@ -75,6 +82,47 @@ def test_local_backend_is_the_default_url_scheme(tmp_path):
     assert isinstance(open_backend("file://%s" % tmp_path), LocalBackend)
     with pytest.raises(ValueError, match="no backend for scheme 'https"):
         open_backend("https://factory.example.com")
+
+
+def test_workspace_can_branch_from_another_request_s_branch(tmp_path):
+    """`base=` is how one request stacks its work on top of another's before either merges."""
+    repo = a_repo(tmp_path / "myproject")
+    backend = LocalBackend(tmp_path / "state", tmp_path / "worktrees")
+
+    dep = backend.create("first thing", "t", "a", repo=str(repo))
+    dep_ws = backend.workspace(dep["id"], str(repo))
+    (dep_ws / "from-dep.txt").write_text("hi")
+    subprocess.run(["git", "-C", str(dep_ws), "add", "-A"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(dep_ws), "-c", "user.email=t@t", "-c", "user.name=t",
+         "commit", "-qm", "dep work"],
+        check=True, capture_output=True,
+    )
+
+    base = "sf/%s" % dep["id"]
+    dependent = backend.create("second thing", "t", "a", repo=str(repo), base=base)
+    assert dependent["base"] == base
+    dependent_ws = backend.workspace(dependent["id"], str(repo), base)
+    assert (dependent_ws / "from-dep.txt").exists(), "stacked on the dependency's own commit"
+
+
+def test_workspace_defaults_to_head_when_no_base_is_given(tmp_path):
+    repo = a_repo(tmp_path / "myproject")
+    backend = LocalBackend(tmp_path / "state", tmp_path / "worktrees")
+    dep = backend.create("first thing", "t", "a", repo=str(repo))
+    dep_ws = backend.workspace(dep["id"], str(repo))
+    (dep_ws / "from-dep.txt").write_text("hi")
+    subprocess.run(["git", "-C", str(dep_ws), "add", "-A"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(dep_ws), "-c", "user.email=t@t", "-c", "user.name=t",
+         "commit", "-qm", "dep work"],
+        check=True, capture_output=True,
+    )
+
+    other = backend.create("unrelated thing", "t", "a", repo=str(repo))
+    assert other["base"] is None
+    other_ws = backend.workspace(other["id"], str(repo))
+    assert not (other_ws / "from-dep.txt").exists(), "not stacked - branches from HEAD, as always"
 
 
 def test_worktree_survives_a_reused_branch_name(installation, tmp_path):

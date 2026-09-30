@@ -281,6 +281,66 @@ def test_one_unloadable_pipeline_fails_its_own_item_only(tmp_path):
 
 
 
+def test_a_request_waits_for_its_dependency_before_starting(tmp_path):
+    backend, pipelines = build(tmp_path, steps={"a": sh("true", next="done")})
+    dep = backend.create("r", "t", "a")
+    item = backend.create("r2", "t", "a", depends_on=[dep["id"]])
+
+    engine.run(backend, pipelines)
+    # `dep` itself is only queued too at this point - checked before either is claimed -
+    # so it stays exactly as untouched as `item` while it waits its turn.
+    assert backend.load(item["id"])["status"] == "queued"
+    assert backend.load(item["id"])["history"] == [], "never claimed, let alone started"
+
+
+def test_a_request_starts_once_its_dependency_is_done(tmp_path):
+    backend, pipelines = build(tmp_path, steps={"a": sh("true", next="done")})
+    dep = backend.create("r", "t", "a")
+    dep["status"] = "done"
+    backend.save(dep)
+    item = backend.create("r2", "t", "a", depends_on=[dep["id"]])
+
+    engine.run(backend, pipelines)
+    assert backend.load(item["id"])["status"] == "done"
+
+
+def test_a_request_keeps_waiting_on_a_parked_or_paused_dependency(tmp_path):
+    """needs_human and paused are not terminal - a person can still unpark them."""
+    backend, pipelines = build(tmp_path, steps={"a": sh("true", next="done")})
+    dep = backend.create("r", "t", "a")
+    dep["status"] = "needs_human"
+    backend.save(dep)
+    item = backend.create("r2", "t", "a", depends_on=[dep["id"]])
+
+    engine.run(backend, pipelines)
+    assert backend.load(item["id"])["status"] == "queued"
+
+
+def test_a_request_parks_when_its_dependency_can_never_finish(tmp_path):
+    backend, pipelines = build(tmp_path, steps={"a": sh("true", next="done")})
+    dep = backend.create("r", "t", "a")
+    dep["status"] = "failed"
+    backend.save(dep)
+    item = backend.create("r2", "t", "a", depends_on=[dep["id"]])
+
+    engine.run(backend, pipelines)
+    refreshed = backend.load(item["id"])
+    assert refreshed["status"] == "needs_human"
+    assert dep["id"] in refreshed["reason"]
+
+
+def test_a_request_parks_when_its_dependency_is_deleted(tmp_path):
+    backend, pipelines = build(tmp_path, steps={"a": sh("true", next="done")})
+    dep = backend.create("r", "t", "a")
+    item = backend.create("r2", "t", "a", depends_on=[dep["id"]])
+    backend.delete(dep["id"])
+
+    engine.run(backend, pipelines)
+    refreshed = backend.load(item["id"])
+    assert refreshed["status"] == "needs_human"
+    assert dep["id"] in refreshed["reason"]
+
+
 def test_a_stage_the_pipeline_does_not_declare_parks(tmp_path):
     """It used to raise out of the worker and leave the item claimed and `running`."""
     backend, pipelines = build(tmp_path, steps={"a": sh("true", next="done")})

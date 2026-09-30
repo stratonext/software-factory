@@ -15,7 +15,7 @@ from software_factory import config
 from software_factory import engine
 from software_factory import steps
 from software_factory.__main__ import main
-from software_factory.backend import LocalBackend
+from software_factory.backend import LocalBackend, branch_name
 
 from conftest import a_repo, ASKS_HUMAN, build, drain, sh, _fake_claude, _id, _verdict_reply
 
@@ -158,6 +158,70 @@ def test_submit_paused_stays_out_of_the_queue(installation, tmp_path, monkeypatc
 
     assert main(["submit", "--description", "x", "--name", "x", "--paused", "--run"]) == 1
     assert "contradict" in capsys.readouterr().err
+
+
+def test_submit_depends_on_a_missing_id_fails_before_creating_anything(installation, tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(a_repo(tmp_path / "myproject"))
+    assert main(["submit", "--description", "a thing", "--name", "a-thing",
+                 "--depends-on", "999"]) == 1
+    assert "no such request: 999" in capsys.readouterr().err
+
+    backend = LocalBackend(installation / "state", installation / "worktrees")
+    assert backend.all() == [], "a bad dependency aborts the submit outright"
+
+
+def test_submit_depends_on_records_and_shows_the_dependency(installation, tmp_path, monkeypatch, capsys):
+    repo = a_repo(tmp_path / "myproject")
+    monkeypatch.chdir(repo)
+    assert main(["submit", "--description", "first", "--name", "first"]) == 0
+    first_id = _id(capsys)
+
+    assert main(["submit", "--description", "second", "--name", "second",
+                 "--depends-on", first_id]) == 0
+    second_id = _id(capsys)
+
+    backend = LocalBackend(installation / "state", installation / "worktrees")
+    assert backend.load(second_id)["depends_on"] == [first_id]
+
+    capsys.readouterr()
+    main(["show", second_id, "--json"])
+    assert json.loads(capsys.readouterr().out)["depends_on"] == [first_id]
+
+    capsys.readouterr()
+    main(["show", second_id])
+    out = capsys.readouterr().out
+    assert "depends on" in out and first_id in out
+
+
+def test_submit_base_rejects_a_ref_that_does_not_exist(installation, tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(a_repo(tmp_path / "myproject"))
+    assert main(["submit", "--description", "a thing", "--name", "a-thing",
+                 "--base", "sf/999"]) == 1
+    assert "not a ref" in capsys.readouterr().err
+
+    backend = LocalBackend(installation / "state", installation / "worktrees")
+    assert backend.all() == [], "a bad base ref aborts the submit outright"
+
+
+def test_submit_base_stacks_a_request_on_a_dependency_s_branch(installation, tmp_path, monkeypatch, capsys):
+    repo = a_repo(tmp_path / "myproject")
+    monkeypatch.chdir(repo)
+    # --run so the dependency's own branch actually exists to stack on.
+    assert main(["submit", "--description", "first", "--name", "first", "--run"]) == 0
+    first_id = _id(capsys)
+    first_branch = branch_name(first_id, "first")
+
+    assert main(["submit", "--description", "second", "--name", "second",
+                 "--depends-on", first_id, "--base", first_branch]) == 0
+    second_id = _id(capsys)
+
+    backend = LocalBackend(installation / "state", installation / "worktrees")
+    assert backend.load(second_id)["base"] == first_branch
+
+    capsys.readouterr()
+    main(["show", second_id])
+    out = capsys.readouterr().out
+    assert "base" in out and first_id in out
 
 
 def test_submit_refuses_an_overlong_name(installation, tmp_path, monkeypatch, capsys):
@@ -517,10 +581,10 @@ def test_cancel_lands_while_the_worktree_is_being_created(tmp_path):
     entered = threading.Event()
 
     class SlowWorktree(LocalBackend):
-        def workspace(self, item_id, repo=""):
+        def workspace(self, item_id, repo="", base=None, name=""):
             entered.set()
             time.sleep(1)  # the window the real `git worktree add` leaves open
-            return super().workspace(item_id, repo)
+            return super().workspace(item_id, repo, base, name)
 
     _, pipelines = build(tmp_path, steps={"a": sh("sleep 5", next="done")})
     backend = SlowWorktree(tmp_path / "state", tmp_path / "worktrees")
@@ -865,7 +929,7 @@ def test_prune_clears_done_requests_and_their_branches(installation, tmp_path, m
     assert "deleted: 1" in out and "freed: " in out and "skipped: 0" in out
     assert [i["id"] for i in backend.all()] == ["2"], "done is the default; queued was not asked for"
     assert not ws.exists(), "the worktree goes with the request"
-    branches = subprocess.run(["git", "-C", str(repo), "branch", "--list", "sf/1"],
+    branches = subprocess.run(["git", "-C", str(repo), "branch", "--list", branch_name("1", "one")],
                               capture_output=True, text=True).stdout
     assert branches == "", "and so does the branch it would otherwise leave behind"
 
@@ -899,7 +963,8 @@ def test_prune_dry_run_deletes_nothing(installation, tmp_path, monkeypatch, caps
 
     assert backend.load("1")["status"] == "done"
     assert ws.exists()
-    assert "sf/1" in subprocess.run(["git", "-C", str(repo), "branch", "--list", "sf/1"],
+    branch = branch_name("1", "one")
+    assert branch in subprocess.run(["git", "-C", str(repo), "branch", "--list", branch],
                                          capture_output=True, text=True).stdout
 
 

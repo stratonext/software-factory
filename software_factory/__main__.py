@@ -26,7 +26,7 @@ from . import engine
 from . import judge
 from . import pipeline as pl
 from . import steps
-from .backend import BRANCH, STATUSES, now, open_backend
+from .backend import STATUSES, branch_name, now, open_backend
 
 # soft_wrap keeps absolute paths on one line: Rich would otherwise fold them at 80
 # columns when stdout is not a terminal. Colour switches itself off there too.
@@ -224,10 +224,24 @@ def submit(
     pipeline: Optional[str] = typer.Option(None, help="the pipeline to run it through; 'auto' asks TypeSafe to pick one, which costs a triage call"),
     run_now: bool = typer.Option(False, "--run", help="work this request now instead of waiting for `sf run`"),
     paused: bool = typer.Option(False, "--paused", help="queue it paused - `sf run <id>` starts it, like unparking a needs_human request"),
+    depends_on: Optional[List[str]] = typer.Option(
+        None, "--depends-on",
+        help="request id that must reach done before this one starts; repeat for more",
+    ),
+    base: Optional[str] = typer.Option(
+        None, "--base",
+        help="ref this request's worktree branches from instead of HEAD - "
+             "another request's own branch (see its `sf show <id>`), to stack this one on top of it",
+    ),
     json_: bool = typer.Option(False, "--json", help=JSON_HELP),
 ):
     """Queue a new request."""
     backend, settings = _open(ctx)
+    for dep_id in depends_on or []:
+        try:
+            backend.load(dep_id)
+        except FileNotFoundError:
+            fail(MISSING % escape(dep_id))
     # click has no mutually exclusive group; say which one is missing rather than a usage dump.
     if (description is None) == (file is None):
         fail("give the request with --description or with --file, not both")
@@ -250,6 +264,11 @@ def submit(
     if problem:
         # Escaped like every other value: a repo path with a [bracket] in it is data.
         fail("%s\n  %s" % (escape(problem), escape(str(path))))
+    if base and subprocess.run(
+        ["git", "-C", str(path), "rev-parse", "--verify", "--quiet", base + "^{commit}"],
+        capture_output=True,
+    ).returncode != 0:
+        fail("--base '%s' is not a ref in %s" % (escape(base), escape(str(path))))
     read = _triage(request, path, settings, pipeline)
     if read.get("specific", 1) < settings["typesafe"]["vague"]:
         fail("triage reads this request as too vague to start (%.2f) - say what to change\n  %s"
@@ -269,7 +288,8 @@ def submit(
     # Recorded with the qualifier the user gave, so the run resolves the file they meant
     # and `sf status` shows `local:dev` rather than a `dev` that could be either one.
     chosen_pipeline = pl.qualified(wanted, pipe.name)
-    item = backend.create(request, chosen_pipeline, pipe.start, repo=str(path), name=name)
+    item = backend.create(request, chosen_pipeline, pipe.start, repo=str(path), name=name,
+                           depends_on=depends_on or [], base=base)
     chosen = read.get("effort")
     if chosen:
         # On the item, not on the stages: a stage with `with: {effort:}` still wins.
@@ -1188,9 +1208,14 @@ def show(
         escape(r["id"]), escape(r["name"]),
         _status_markup(r["status"], _clip(" ".join(r["reason"].split()), 120))))
     out.print(kv([("repo", item.get("repo", "")), ("pipeline", r["pipeline"]), ("stage", r["stage"])]))
+    if item.get("depends_on"):
+        out.print(kv([("depends on", ", ".join(item["depends_on"]))]))
+    if item.get("base"):
+        out.print(kv([("base", item["base"])]))
     out.print(kv([("passes", r["passes"]), ("steps", len(item["history"])),
                   ("cost", _cost(r["cost_usd"])), ("started", item.get("started", "")),
                   ("ended", item.get("ended", ""))]))
+    out.print(kv([("branch", branch_name(item["id"], item.get("name", "")))]))
     out.print(kv([("workspace", item.get("workspace", ""))]))
     running = item.get("running_step")
     if running:
@@ -1534,7 +1559,7 @@ def _drop_branch(item):
     to delete a branch that is still checked out, which is the other half of the safety -
     and a branch that will not go is reported, never fatal. The prune is the point.
     """
-    repo, branch = item.get("repo", ""), BRANCH % item["id"]
+    repo, branch = item.get("repo", ""), branch_name(item["id"], item.get("name", ""))
     if not repo or not item.get("workspace"):
         return None
     ref = ["git", "-C", repo, "show-ref", "--verify", "--quiet", "refs/heads/%s" % branch]

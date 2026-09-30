@@ -27,7 +27,13 @@ steps:
     output: code.md
     next: gate
 
-
+  gate:
+    name: human-review-required
+    uses: typesafe
+    with:
+      questions: prompts/human-review.yaml
+    output: gate.md                    # `human` is never routed - it parks
+    on: { pass: commit, fail: code }
 
   commit:
     name: commit

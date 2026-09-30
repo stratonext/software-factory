@@ -164,10 +164,16 @@ assume, and what it must never do.
 | `read_artifact` | Read one back by that reference |
 | `delete` | Remove an item and everything stored for it. Idempotent |
 
-#### `create(request, pipeline, start_stage, repo, name="") -> item`
+#### `create(request, pipeline, start_stage, repo, name="", depends_on=(), base=None) -> item`
 
 Allocate an id and persist a new item in `queued` at `start_stage`, with `passes` at 1
-and empty `notes` and `history`. Return it.
+and empty `notes` and `history`. `depends_on` records other items' ids this one must not
+start ahead of — the engine's `run()` leaves it `queued` untouched while any of them is
+short of `done`, and parks it `needs_human` if one instead reaches `failed`/`cancelled` or
+disappears, rather than waiting on something that can never finish. `base`, recorded here
+and passed to `workspace()` when the item is actually walked, is the ref this item's
+worktree branches from instead of HEAD — typically another request's own `sf/<id>` branch,
+so one request's work stacks on top of another's before either merges. Return it.
 
 - **Guarantees.** The id is unique across the installation, forever. Two concurrent
   callers never receive the same one, and an id that has been deleted is never handed
@@ -220,9 +226,12 @@ Compare-and-set `queued → running`. True if this caller won.
 - **Never.** Block, retry, or wait for the current holder. A loser is told no and moves
   to the next item.
 
-#### `workspace(item_id, repo) -> path`
+#### `workspace(item_id, repo, base=None) -> path`
 
-The directory agents work in for this request. Created on first call.
+The directory agents work in for this request. Created on first call. `base`, given, is the
+ref `git worktree add -B` branches from instead of HEAD - the local implementation's `-B`
+already resets on every call, so this is one more argument to that same command, not a
+second code path.
 
 - **Guarantees.** A path on the **local** filesystem (see below) that a subprocess can
   `cd` into, and the same path on every later call for the same request.
