@@ -26,7 +26,7 @@ from . import engine
 from . import judge
 from . import pipeline as pl
 from . import steps
-from .backend import BRANCH, STATUSES, now, open_backend
+from .backend import STATUSES, branch_name, now, open_backend
 
 # soft_wrap keeps absolute paths on one line: Rich would otherwise fold them at 80
 # columns when stdout is not a terminal. Colour switches itself off there too.
@@ -233,7 +233,7 @@ def submit(
     base: Optional[str] = typer.Option(
         None, "--base",
         help="ref this request's worktree branches from instead of HEAD - "
-             "another request's own sf/<id> branch, to stack this one on top of it",
+             "another request's own branch (see its `sf show <id>`), to stack this one on top of it",
     ),
     json_: bool = typer.Option(False, "--json", help=JSON_HELP),
 ):
@@ -1219,6 +1219,7 @@ def show(
     out.print(kv([("passes", r["passes"]), ("steps", len(item["history"])),
                   ("cost", _cost(r["cost_usd"])), ("started", item.get("started", "")),
                   ("ended", item.get("ended", ""))]))
+    out.print(kv([("branch", branch_name(item["id"], item.get("name", "")))]))
     out.print(kv([("workspace", item.get("workspace", ""))]))
     running = item.get("running_step")
     if running:
@@ -1562,7 +1563,7 @@ def _drop_branch(item):
     to delete a branch that is still checked out, which is the other half of the safety -
     and a branch that will not go is reported, never fatal. The prune is the point.
     """
-    repo, branch = item.get("repo", ""), BRANCH % item["id"]
+    repo, branch = item.get("repo", ""), branch_name(item["id"], item.get("name", ""))
     if not repo or not item.get("workspace"):
         return None
     ref = ["git", "-C", repo, "show-ref", "--verify", "--quiet", "refs/heads/%s" % branch]

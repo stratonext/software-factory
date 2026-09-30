@@ -7,6 +7,7 @@ without the engine changing.
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -21,9 +22,17 @@ def now():
 # Every state an item can be in, in lifecycle order. The engine and `sf cancel`
 # set them; `sf prune` validates what it was asked to clear against them.
 STATUSES = ("queued", "running", "done", "failed", "needs_human", "cancelled", "paused")
-# One request, one branch. Defined once because `workspace` creates it and the CLI's
-# `delete` removes it, and the two drifting apart deletes the wrong branch.
-BRANCH = "sf/%s"
+
+
+def branch_name(item_id, name=""):
+    """This request's branch: `sf/<id>`, plus a slug of its `--name` when it has one,
+    so a branch listing says what a request was for, not just which one it was.
+
+    Called from both `workspace` (which creates the branch) and the CLI's `delete`
+    (which removes it) - the two must agree, so this is the one place the format lives.
+    """
+    slug = re.sub(r"-+", "-", re.sub(r"[^a-z0-9]+", "-", name.lower())).strip("-")
+    return "sf/%s-%s" % (item_id, slug) if slug else "sf/%s" % item_id
 
 
 def _id_number(path):
@@ -79,12 +88,13 @@ class Backend(ABC):
         """Compare-and-set queued -> running. True if this caller won the race."""
 
     @abstractmethod
-    def workspace(self, item_id, repo, base=None):
+    def workspace(self, item_id, repo, base=None, name=""):
         """A local directory the agents work in. Created on first call.
 
         Worktrees are centralised rather than kept beside the item, so they can be
         found by repo without knowing request ids. ``base``, given, is the ref the
-        worktree's branch starts from instead of HEAD - see ``create``.
+        worktree's branch starts from instead of HEAD - see ``create``. ``name`` is
+        the request's own label, folded into the branch name via ``branch_name``.
         """
 
     @abstractmethod
@@ -194,7 +204,7 @@ class LocalBackend(Backend):
         # but never a path, because request ids are unique across the installation.
         return self.worktrees / (Path(repo).name if repo else "_scratch") / item_id
 
-    def workspace(self, item_id, repo, base=None):
+    def workspace(self, item_id, repo, base=None, name=""):
         """A git worktree on its own branch, so concurrent agents never collide.
 
         Laid out as <worktrees>/<repo name>/<request id>, so everything in flight for
@@ -211,10 +221,10 @@ class LocalBackend(Backend):
         # does not collide with its own history.
         subprocess.run(["git", "-C", str(repo), "worktree", "prune"], capture_output=True)
         # -B, not -b: create the branch or reset it to HEAD (or `base`, if given).
-        # `sf/<id>` is this request's branch, and a request id is never reused, so
-        # resetting is correct.
+        # This request's branch, and a request id is never reused, so resetting is correct.
+        branch = branch_name(item_id, name)
         args = ["git", "-C", str(repo), "worktree", "add", "-B",
-                BRANCH % item_id, str(ws.resolve())]
+                branch, str(ws.resolve())]
         if base:
             args.append(base)
         if subprocess.run(args, capture_output=True, text=True).returncode != 0:
@@ -223,7 +233,7 @@ class LocalBackend(Backend):
             subprocess.run(["git", "clone", "--local", str(repo), str(ws)], check=True, capture_output=True)
             if base:
                 subprocess.run(
-                    ["git", "-C", str(ws), "checkout", "-B", BRANCH % item_id, base],
+                    ["git", "-C", str(ws), "checkout", "-B", branch, base],
                     check=True, capture_output=True,
                 )
         return ws
