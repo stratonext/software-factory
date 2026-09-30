@@ -164,10 +164,13 @@ assume, and what it must never do.
 | `read_artifact` | Read one back by that reference |
 | `delete` | Remove an item and everything stored for it. Idempotent |
 
-#### `create(request, pipeline, start_stage, repo, name="") -> item`
+#### `create(request, pipeline, start_stage, repo, name="", depends_on=()) -> item`
 
 Allocate an id and persist a new item in `queued` at `start_stage`, with `passes` at 1
-and empty `notes` and `history`. Return it.
+and empty `notes` and `history`. `depends_on` records other items' ids this one must not
+start ahead of — the engine's `run()` leaves it `queued` untouched while any of them is
+short of `done`, and parks it `needs_human` if one instead reaches `failed`/`cancelled` or
+disappears, rather than waiting on something that can never finish. Return it.
 
 - **Guarantees.** The id is unique across the installation, forever. Two concurrent
   callers never receive the same one, and an id that has been deleted is never handed

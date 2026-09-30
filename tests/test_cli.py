@@ -160,6 +160,39 @@ def test_submit_paused_stays_out_of_the_queue(installation, tmp_path, monkeypatc
     assert "contradict" in capsys.readouterr().err
 
 
+def test_submit_depends_on_a_missing_id_fails_before_creating_anything(installation, tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(a_repo(tmp_path / "myproject"))
+    assert main(["submit", "--description", "a thing", "--name", "a-thing",
+                 "--depends-on", "999"]) == 1
+    assert "no such request: 999" in capsys.readouterr().err
+
+    backend = LocalBackend(installation / "state", installation / "worktrees")
+    assert backend.all() == [], "a bad dependency aborts the submit outright"
+
+
+def test_submit_depends_on_records_and_shows_the_dependency(installation, tmp_path, monkeypatch, capsys):
+    repo = a_repo(tmp_path / "myproject")
+    monkeypatch.chdir(repo)
+    assert main(["submit", "--description", "first", "--name", "first"]) == 0
+    first_id = _id(capsys)
+
+    assert main(["submit", "--description", "second", "--name", "second",
+                 "--depends-on", first_id]) == 0
+    second_id = _id(capsys)
+
+    backend = LocalBackend(installation / "state", installation / "worktrees")
+    assert backend.load(second_id)["depends_on"] == [first_id]
+
+    capsys.readouterr()
+    main(["show", second_id, "--json"])
+    assert json.loads(capsys.readouterr().out)["depends_on"] == [first_id]
+
+    capsys.readouterr()
+    main(["show", second_id])
+    out = capsys.readouterr().out
+    assert "depends on" in out and first_id in out
+
+
 def test_submit_refuses_an_overlong_name(installation, tmp_path, monkeypatch, capsys):
     """A name is a label for one status column, not a second request."""
     monkeypatch.chdir(a_repo(tmp_path / "myproject"))

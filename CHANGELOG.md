@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format is
 
 ## [Unreleased]
 
+### Added
+
+- `sf submit --depends-on <id>` (repeatable) holds a request `queued` until the named
+  request reaches `done`; if that dependency instead ends `failed`/`cancelled` or is
+  deleted, the dependent parks `needs_human` naming it, rather than waiting forever.
+
 ## [0.0.3] - 2026-09-23
 
 Promoted 0.0.3rc1 to 0.0.3

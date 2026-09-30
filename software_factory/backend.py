@@ -50,12 +50,13 @@ class Backend(ABC):
     """
 
     @abstractmethod
-    def create(self, request, pipeline, start_stage, repo, name=""):
+    def create(self, request, pipeline, start_stage, repo, name="", depends_on=()):
         """Allocate an id and persist a new queued work item. Returns the item.
 
         ``repo`` is the git repository this request will be worked in. It belongs to
         the item, not to the factory: one installation serves many repos at once.
         ``name`` is a human label shown in listings, distinct from the generated ``id``.
+        ``depends_on`` is other requests' ids this one must not start ahead of.
         """
 
     @abstractmethod
@@ -138,7 +139,7 @@ class LocalBackend(Backend):
         return [json.loads(p.read_text())
                 for p in sorted(self.items.glob("*.json"), key=_id_number)]
 
-    def create(self, request, pipeline, start_stage, repo="", name=""):
+    def create(self, request, pipeline, start_stage, repo="", name="", depends_on=()):
         while True:
             # Everything under items/ is named after an id - the item, its directory,
             # its claim marker, its tombstone - so the glob is every id ever handed
@@ -166,6 +167,7 @@ class LocalBackend(Backend):
                 "created": now(),
                 "notes": [],
                 "history": [],
+                "depends_on": list(depends_on),
             }
         )
 
