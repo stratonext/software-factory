@@ -122,7 +122,7 @@ def _walk(backend, pipe, item, step_timeout, agent_attempts, retry_wait, max_inp
         return None  # cancelled while it waited for a worker
     if not backend.claim(item):
         return None  # another engine got there first
-    workspace = backend.workspace(item["id"], item.get("repo", ""))
+    workspace = backend.workspace(item["id"], item.get("repo", ""), item.get("base"), item.get("name", ""))
     steps.ensure_scratch(workspace)
     # Recorded so `sf cancel` can find the pid file without calling `workspace()`,
     # which would create a worktree and a branch as a side effect of signalling.

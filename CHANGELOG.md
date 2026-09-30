@@ -11,6 +11,9 @@ All notable changes to this project are documented here. The format is
 - `sf submit --depends-on <id>` (repeatable) holds a request `queued` until the named
   request reaches `done`; if that dependency instead ends `failed`/`cancelled` or is
   deleted, the dependent parks `needs_human` naming it, rather than waiting forever.
+- `sf submit --base <ref>` branches a request's worktree from that ref instead of HEAD -
+  pass another request's own `sf/<id>` branch to stack this one on top of its work before
+  either merges. Rejected at submit if the ref does not exist.
 
 ## [0.0.3] - 2026-09-23
 
