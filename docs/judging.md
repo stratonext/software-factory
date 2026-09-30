@@ -13,9 +13,10 @@ here is reached — submit behaves exactly as it always did. A step that does na
 and cannot ask — no key, an HTTP error, a question left unanswered — returns `human` and
 parks the request rather than guessing.
 
-The same model can also pick the process for you: `--pipeline auto` and `--effort auto` ask
-it which pipeline a request belongs in and how hard the agent should think, before anything
-is queued, and flag a request too vague for anyone to start on.
+The same model can also pick the process for you: `--pipeline auto` asks it which pipeline a
+request belongs in before anything is queued, and flags a request too vague for anyone to
+start on. `triage: true` in the config additionally asks it how hard the agent should think
+on every submit.
 
 [`docs/pipelines.md`](pipelines.md#the-third-kind-of-stage-judge) has the whole shape —
 question types, thresholds, the `typesafe:` config block — and

@@ -12,8 +12,20 @@ All notable changes to this project are documented here. The format is
   request reaches `done`; if that dependency instead ends `failed`/`cancelled` or is
   deleted, the dependent parks `needs_human` naming it, rather than waiting forever.
 - `sf submit --base <ref>` branches a request's worktree from that ref instead of HEAD -
-  pass another request's own `sf/<id>` branch to stack this one on top of its work before
-  either merges. Rejected at submit if the ref does not exist.
+  pass another request's own branch (`sf show <id>` names it) to stack this one on top of
+  its work before either merges. Rejected at submit if the ref does not exist.
+- A request's branch now carries a slug of its `--name`, not just its id (`sf/7-fix-login`
+  rather than `sf/7`), so a branch listing says what a request was for.
+
+### Changed
+- `sf doctor` always reports whether `TYPESAFE_API_KEY` is set, instead of only when a
+  judged pipeline or `triage: true` is present. Still non-essential (won't fail the
+  command) unless something actually needs the key.
+
+### Removed
+- `sf submit --force` and `--effort`. A request triage reads as too vague now always
+  blocks submission, with no override; per-item effort selection is still available
+  automatically via `triage: true` in the config, just not as a per-submit CLI flag.
 
 ## [0.0.3] - 2026-09-23
 

@@ -222,8 +222,6 @@ def submit(
     file: Optional[str] = typer.Option(None, "-f", "--file", help="read the request from a file ('-' for stdin)"),
     repo: Optional[str] = typer.Option(None, help="the git repo to work in (default: the current directory)"),
     pipeline: Optional[str] = typer.Option(None, help="the pipeline to run it through; 'auto' asks TypeSafe to pick one, which costs a triage call"),
-    effort: Optional[str] = typer.Option(None, help="effort for every agent stage that does not set its own (low|medium|high|xhigh|max), or 'auto' to ask TypeSafe in the same call"),
-    force: bool = typer.Option(False, "--force", help="queue it even if triage says the request is too vague"),
     run_now: bool = typer.Option(False, "--run", help="work this request now instead of waiting for `sf run`"),
     paused: bool = typer.Option(False, "--paused", help="queue it paused - `sf run <id>` starts it, like unparking a needs_human request"),
     depends_on: Optional[List[str]] = typer.Option(
@@ -271,12 +269,10 @@ def submit(
         capture_output=True,
     ).returncode != 0:
         fail("--base '%s' is not a ref in %s" % (escape(base), escape(str(path))))
-    if effort and effort not in pl.EFFORTS + ("auto",):
-        fail("--effort must be one of %s, or auto" % ", ".join(pl.EFFORTS))
-    read = _triage(request, path, settings, pipeline, effort)
-    if read.get("specific", 1) < settings["typesafe"]["vague"] and not force:
-        fail("triage reads this request as too vague to start (%.2f) - say what to change, "
-             "or --force\n  %s" % (read["specific"], escape(request[:200])))
+    read = _triage(request, path, settings, pipeline)
+    if read.get("specific", 1) < settings["typesafe"]["vague"]:
+        fail("triage reads this request as too vague to start (%.2f) - say what to change\n  %s"
+             % (read["specific"], escape(request[:200])))
     if pipeline == "auto":
         pipeline = read.get("pipeline")  # None falls through to the configured default
     wanted = pipeline or settings["pipeline"]
@@ -294,7 +290,7 @@ def submit(
     chosen_pipeline = pl.qualified(wanted, pipe.name)
     item = backend.create(request, chosen_pipeline, pipe.start, repo=str(path), name=name,
                            depends_on=depends_on or [], base=base)
-    chosen = effort if effort and effort != "auto" else read.get("effort")
+    chosen = read.get("effort")
     if chosen:
         # On the item, not on the stages: a stage with `with: {effort:}` still wins.
         item["effort"] = chosen
@@ -323,13 +319,13 @@ def submit(
             stage=None, json_=json_)
 
 
-def _triage(request, repo, settings, pipeline, effort):
+def _triage(request, repo, settings, pipeline):
     """Ask TypeSafe what the user did not say. {} unless asked, and {} on any failure.
 
-    Opt in with `--pipeline auto`, `--effort auto`, or `triage: true` in the config. Never
-    blocks: a request must still queue with no key, no network, and no confident answer.
+    Opt in with `--pipeline auto` or `triage: true` in the config. Never blocks: a request
+    must still queue with no key, no network, and no confident answer.
     """
-    if not (pipeline == "auto" or effort == "auto" or settings.get("triage")):
+    if not (pipeline == "auto" or settings.get("triage")):
         return {}
     return judge.triage(request, _known_pipelines(repo, settings))
 
@@ -1020,7 +1016,7 @@ def config_cmd(ctx: typer.Context, json_: bool = typer.Option(False, "--json", h
                   ("default agent", settings["runner"]),
                   ("concurrency", settings["concurrency"])], indent=""))
     out.print(kv([("triage", "on - TypeSafe picks the pipeline and the effort" if settings["triage"]
-                   else "off   (--pipeline auto, --effort auto, or triage: true)")], indent=""))
+                   else "off   (--pipeline auto, or triage: true)")], indent=""))
     out.print(kv([("step_timeout", "%ss" % settings["step_timeout"]),
                   ("agent_attempts", settings["agent_attempts"]),
                   ("retry_wait", "%ss" % settings["retry_wait"]),
@@ -1777,17 +1773,16 @@ def doctor(ctx: typer.Context, json_: bool = typer.Option(False, "--json", help=
             continue
         judged = judged or any(pipe.kind(stage) == "judge" for stage in pipe.steps)
 
-    # Only when this installation would actually ask: a key nobody needs is not a problem.
-    # A judged pipeline merely sitting in the directory is not essential either - it is
-    # opt-in per request, and `sf doctor` must not fail a perfectly good install.
-    if judged or settings.get("triage"):
-        triage = bool(settings.get("triage"))
-        key_env = settings["typesafe"]["api_key_env"]
-        check(key_env, "set" if os.environ.get(key_env) else "not set",
-              "" if os.environ.get(key_env)
-              else "export it: %s" % ("triage: true is on, and does nothing without a key"
-                                      if triage else "a judge: step parks for a human without one"),
-              essential=triage)
+    # Always shown, so `sf submit` reads as informed rather than surprising - but a key
+    # nobody needs is not a problem: a judged pipeline merely sitting in the directory is
+    # opt-in per request, and `sf doctor` must not fail a perfectly good install over it.
+    triage = bool(settings.get("triage"))
+    key_env = settings["typesafe"]["api_key_env"]
+    check(key_env, "set" if os.environ.get(key_env) else "not set",
+          "" if os.environ.get(key_env) or not (judged or triage)
+          else "export it: %s" % ("triage: true is on, and does nothing without a key"
+                                  if triage else "a judge: step parks for a human without one"),
+          essential=triage)
 
     if as_json(json_):
         emit_json(checks)
