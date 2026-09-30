@@ -84,6 +84,47 @@ def test_local_backend_is_the_default_url_scheme(tmp_path):
         open_backend("https://factory.example.com")
 
 
+def test_workspace_can_branch_from_another_request_s_branch(tmp_path):
+    """`base=` is how one request stacks its work on top of another's before either merges."""
+    repo = a_repo(tmp_path / "myproject")
+    backend = LocalBackend(tmp_path / "state", tmp_path / "worktrees")
+
+    dep = backend.create("first thing", "t", "a", repo=str(repo))
+    dep_ws = backend.workspace(dep["id"], str(repo))
+    (dep_ws / "from-dep.txt").write_text("hi")
+    subprocess.run(["git", "-C", str(dep_ws), "add", "-A"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(dep_ws), "-c", "user.email=t@t", "-c", "user.name=t",
+         "commit", "-qm", "dep work"],
+        check=True, capture_output=True,
+    )
+
+    base = "sf/%s" % dep["id"]
+    dependent = backend.create("second thing", "t", "a", repo=str(repo), base=base)
+    assert dependent["base"] == base
+    dependent_ws = backend.workspace(dependent["id"], str(repo), base)
+    assert (dependent_ws / "from-dep.txt").exists(), "stacked on the dependency's own commit"
+
+
+def test_workspace_defaults_to_head_when_no_base_is_given(tmp_path):
+    repo = a_repo(tmp_path / "myproject")
+    backend = LocalBackend(tmp_path / "state", tmp_path / "worktrees")
+    dep = backend.create("first thing", "t", "a", repo=str(repo))
+    dep_ws = backend.workspace(dep["id"], str(repo))
+    (dep_ws / "from-dep.txt").write_text("hi")
+    subprocess.run(["git", "-C", str(dep_ws), "add", "-A"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(dep_ws), "-c", "user.email=t@t", "-c", "user.name=t",
+         "commit", "-qm", "dep work"],
+        check=True, capture_output=True,
+    )
+
+    other = backend.create("unrelated thing", "t", "a", repo=str(repo))
+    assert other["base"] is None
+    other_ws = backend.workspace(other["id"], str(repo))
+    assert not (other_ws / "from-dep.txt").exists(), "not stacked - branches from HEAD, as always"
+
+
 def test_worktree_survives_a_reused_branch_name(installation, tmp_path):
     """Request ids restart when an installation is re-created; the branch must not collide."""
     repo = a_repo(tmp_path / "myproject")

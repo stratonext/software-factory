@@ -193,7 +193,7 @@ with a first line:
 
 ```bash
 sf init                     # create ~/.sf, its config.yaml and its directories
-sf submit --description "..." --name x    # queue a request against this repo (--file, --pipeline, --run, --paused, --depends-on)
+sf submit --description "..." --name x    # queue a request against this repo (--file, --pipeline, --run, --paused, --depends-on, --base)
 sf run                      # work the queue in the background, returns at once (--wait to block, --repo, <id>..., --note, --stage)
 sf daemon start              # keep working the queue as requests land (--interval, --concurrency, --repo)
 sf daemon status             # is a background engine running?

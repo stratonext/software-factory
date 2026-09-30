@@ -193,6 +193,36 @@ def test_submit_depends_on_records_and_shows_the_dependency(installation, tmp_pa
     assert "depends on" in out and first_id in out
 
 
+def test_submit_base_rejects_a_ref_that_does_not_exist(installation, tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(a_repo(tmp_path / "myproject"))
+    assert main(["submit", "--description", "a thing", "--name", "a-thing",
+                 "--base", "sf/999"]) == 1
+    assert "not a ref" in capsys.readouterr().err
+
+    backend = LocalBackend(installation / "state", installation / "worktrees")
+    assert backend.all() == [], "a bad base ref aborts the submit outright"
+
+
+def test_submit_base_stacks_a_request_on_a_dependency_s_branch(installation, tmp_path, monkeypatch, capsys):
+    repo = a_repo(tmp_path / "myproject")
+    monkeypatch.chdir(repo)
+    # --run so the dependency's own sf/<id> branch actually exists to stack on.
+    assert main(["submit", "--description", "first", "--name", "first", "--run"]) == 0
+    first_id = _id(capsys)
+
+    assert main(["submit", "--description", "second", "--name", "second",
+                 "--depends-on", first_id, "--base", "sf/%s" % first_id]) == 0
+    second_id = _id(capsys)
+
+    backend = LocalBackend(installation / "state", installation / "worktrees")
+    assert backend.load(second_id)["base"] == "sf/%s" % first_id
+
+    capsys.readouterr()
+    main(["show", second_id])
+    out = capsys.readouterr().out
+    assert "base" in out and first_id in out
+
+
 def test_submit_refuses_an_overlong_name(installation, tmp_path, monkeypatch, capsys):
     """A name is a label for one status column, not a second request."""
     monkeypatch.chdir(a_repo(tmp_path / "myproject"))
@@ -550,10 +580,10 @@ def test_cancel_lands_while_the_worktree_is_being_created(tmp_path):
     entered = threading.Event()
 
     class SlowWorktree(LocalBackend):
-        def workspace(self, item_id, repo=""):
+        def workspace(self, item_id, repo="", base=None):
             entered.set()
             time.sleep(1)  # the window the real `git worktree add` leaves open
-            return super().workspace(item_id, repo)
+            return super().workspace(item_id, repo, base)
 
     _, pipelines = build(tmp_path, steps={"a": sh("sleep 5", next="done")})
     backend = SlowWorktree(tmp_path / "state", tmp_path / "worktrees")
