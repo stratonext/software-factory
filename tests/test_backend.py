@@ -46,6 +46,13 @@ def test_backend_ids_are_unpadded_and_stay_in_numeric_order(backend_impl):
     assert [i["id"] for i in backend_impl.all()] == ids
 
 
+def test_backend_create_records_depends_on(backend_impl):
+    a = backend_impl.create("do a thing", "t", "a")
+    b = backend_impl.create("do another", "t", "a", depends_on=[a["id"]])
+    assert backend_impl.load(b["id"])["depends_on"] == [a["id"]]
+    assert a["depends_on"] == [], "no dependency named, empty list rather than a missing key"
+
+
 def test_backend_workspace_is_a_local_directory(backend_impl):
     backend_impl.create("do a thing", "t", "a")
     ws = backend_impl.workspace("1", repo="")

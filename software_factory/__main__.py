@@ -226,10 +226,19 @@ def submit(
     force: bool = typer.Option(False, "--force", help="queue it even if triage says the request is too vague"),
     run_now: bool = typer.Option(False, "--run", help="work this request now instead of waiting for `sf run`"),
     paused: bool = typer.Option(False, "--paused", help="queue it paused - `sf run <id>` starts it, like unparking a needs_human request"),
+    depends_on: Optional[List[str]] = typer.Option(
+        None, "--depends-on",
+        help="request id that must reach done before this one starts; repeat for more",
+    ),
     json_: bool = typer.Option(False, "--json", help=JSON_HELP),
 ):
     """Queue a new request."""
     backend, settings = _open(ctx)
+    for dep_id in depends_on or []:
+        try:
+            backend.load(dep_id)
+        except FileNotFoundError:
+            fail(MISSING % escape(dep_id))
     # click has no mutually exclusive group; say which one is missing rather than a usage dump.
     if (description is None) == (file is None):
         fail("give the request with --description or with --file, not both")
@@ -273,7 +282,8 @@ def submit(
     # Recorded with the qualifier the user gave, so the run resolves the file they meant
     # and `sf status` shows `local:dev` rather than a `dev` that could be either one.
     chosen_pipeline = pl.qualified(wanted, pipe.name)
-    item = backend.create(request, chosen_pipeline, pipe.start, repo=str(path), name=name)
+    item = backend.create(request, chosen_pipeline, pipe.start, repo=str(path), name=name,
+                           depends_on=depends_on or [])
     chosen = effort if effort and effort != "auto" else read.get("effort")
     if chosen:
         # On the item, not on the stages: a stage with `with: {effort:}` still wins.
@@ -1192,6 +1202,8 @@ def show(
         escape(r["id"]), escape(r["name"]),
         _status_markup(r["status"], _clip(" ".join(r["reason"].split()), 120))))
     out.print(kv([("repo", item.get("repo", "")), ("pipeline", r["pipeline"]), ("stage", r["stage"])]))
+    if item.get("depends_on"):
+        out.print(kv([("depends on", ", ".join(item["depends_on"]))]))
     out.print(kv([("passes", r["passes"]), ("steps", len(item["history"])),
                   ("cost", _cost(r["cost_usd"])), ("started", item.get("started", "")),
                   ("ended", item.get("ended", ""))]))

@@ -28,7 +28,7 @@ daemon serves every image. Requests outlive your shell: submit here, ask from an
 
 | Command | What it does |
 |---|---|
-| `sf submit --description "<request>" --name <label>` | queue a request; prints its id. `--file <path>` (`-` for stdin) for a long request, `--pipeline <name>` (`local:<name>` / `global:<name>` when the same name exists in both tiers), `--repo <path>`, `--run` to work it immediately, `--paused` to queue it without letting `sf run`/`sf daemon` pick it up yet |
+| `sf submit --description "<request>" --name <label>` | queue a request; prints its id. `--file <path>` (`-` for stdin) for a long request, `--pipeline <name>` (`local:<name>` / `global:<name>` when the same name exists in both tiers), `--repo <path>`, `--run` to work it immediately, `--paused` to queue it without letting `sf run`/`sf daemon` pick it up yet, `--depends-on <id>` (repeatable) to hold it `queued` until that request reaches `done` - if it instead ends `failed`/`cancelled` this one parks `needs_human` rather than waiting forever |
 | `sf run` | work the queue: **starts an engine in the background and returns at once**. `--wait` blocks until it is done instead, `--repo` limits to this repo, `<ids>` to only these, `--concurrency N` |
 | `sf pause <ids>` | pull queued requests back out of the queue without cancelling them; `sf run <id>` resumes one, same as unparking `needs_human` - it goes back to `queued` and is worked when a slot is free, never past the configured concurrency |
 | `sf daemon start` | leave an engine running that keeps working the queue as requests land, polling every `--interval` seconds (default 5) under the same `--concurrency` quota `sf run` uses. `sf daemon status` / `sf daemon stop` |
