@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=../../docs/pipeline-schema.yaml
 #
-# The shortest line there is: one agent, one cheap gate, then a commit.
+# The shortest line there is: one agent, two cheap gates, then a commit.
 #
 # `uses:` is who performs a step and `with:` is what they are handed. `next:` is an
 # unconditional edge; `on:` routes on the verdict. `done` is the implicit terminal stage.
@@ -8,11 +8,12 @@
 # `sf submit --description "..." --pipeline dev`
 name: dev
 description: >-
-  Implement the request with a coding agent, scan the diff for a leaked credential, then
-  commit it. No plan, no tests, no review - the only gate is the cheap one, because a
-  committed key is the mistake worth paying $0.0002 a run to avoid. Needs TYPESAFE_API_KEY.
-version: 1
-max_passes: 0          # nothing routes backwards here
+  Implement the request with a coding agent, gate the diff on a typed judgment (risky or
+  out-of-scope work parks for a human, unfinished work goes back to the coder), scan it for
+  a leaked credential, then commit it. No plan, no tests, no review agent - only the cheap
+  gates, at a fraction of a cent each. Needs TYPESAFE_API_KEY.
+version: 2
+max_passes: 2          # gate -> code is rework; after two round-trips a human is asked
 concurrency: 2         # requests worked in parallel; one subscription, so keep it modest
 start: code
 
