@@ -6,6 +6,7 @@ Maintained by [StratoNext](https://www.stratonext.ai).
 [![PyPI](https://img.shields.io/pypi/v/software-factory.svg)](https://pypi.org/project/software-factory/)
 [![License: MIT](https://img.shields.io/pypi/l/software-factory.svg)](LICENSE)
 [![Listed in Awesome Jev](https://awesomejev.vercel.app/badge.svg)](https://awesomejev.vercel.app)
+[![Mentioned in Awesome Software Factories](https://awesome.re/mentioned-badge.svg)](https://github.com/varun1505/awesome-software-factories)
 
 # Local Software Factory
 
