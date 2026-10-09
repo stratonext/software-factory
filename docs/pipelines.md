@@ -10,7 +10,7 @@ Two kinds of edge leave a stage:
 - an **unconditional** edge — when this stage passes, go there;
 - a **conditional** edge set, keyed by verdict — `pass` goes here, `fail` goes there.
 
-`done` is the implicit terminal stage. The default pipeline looks like this:
+`done` is the implicit terminal stage. A full line looks like this:
 
 ```mermaid
 graph LR
@@ -86,7 +86,7 @@ then `~/.sf/runners/`, then the ones packaged with the factory. Three ship built
 the only way to know the seam is real.
 
 ```yaml
-# agents/codex.yaml
+# .sf/runners/codex.yaml
 name: codex
 description: OpenAI Codex CLI in non-interactive exec mode.
 kind: agent
@@ -130,8 +130,8 @@ that streams, needs a TTY, or has its own idea of what a session is will need re
 wrapping `sh -c` and one speaking an HTTP API — registered by name so `uses:` has one meaning.
 
 A runner definition is **executable content from a file**, exactly as `with: {run: ...}` is.
-It is exec'd as an argv list and never through a shell, but `agents/` is as much a trust
-boundary as `pipelines/`: a repo you would not run `make` in is a repo whose agent definitions
+It is exec'd as an argv list and never through a shell, but `.sf/runners/` is as much a trust
+boundary as `.sf/pipelines/`: a repo you would not run `make` in is a repo whose runner definitions
 you should not resolve either.
 
 ### What `uses:` deliberately does not borrow from Actions
@@ -193,11 +193,12 @@ The same reasoning is why a missing or unparseable verdict parks rather than def
 Reading silence as `pass` ships unreviewed work; reading it as `fail` spins the loop. Neither
 is a decision anybody made.
 
-How a stage states its verdict — the closing JSON object agents are asked for, the stdout
-object a `run:` step can emit instead of relying on its exit code — is
-[in the README](../README.md#verdicts), with the prompt suffix the engine appends. `review:
-true` is the pipeline author requiring a person regardless of the verdict; what that does to
-a parked request is in [operating.md](operating.md#needs_human-the-five-ways-a-request-parks).
+An agent states its verdict as a closing JSON object - `VERDICT_SUFFIX` in
+`software_factory/steps.py` is the text the engine appends to every agent prompt asking for
+it. A `run:` step passes on exit 0 and fails otherwise, or prints that same object on stdout
+to say `human`. `review: true` is the pipeline author requiring a person regardless of the
+verdict: the request is routed first, then parks, so `sf run <id>` approves it into the next
+stage and `sf run <id> --stage <earlier>` rejects it.
 
 ## Rework, notes, and the pass counter
 
@@ -242,7 +243,7 @@ the work. A dead session id is never fatal: the call is retried cold.
 thinking a plan does, and the stages that route the work (`commit`, a mechanical edit) run
 `low`. A runner that cannot express an effort level ignores it and records that it did.
 
-The other lever is the pipeline itself. `software_factory/pipelines/quick.yaml` is code-then-commit, no
+The other lever is the pipeline itself. The README's `quick` pipeline is code-then-commit, no
 plan and no review: two calls instead of five for a request small enough to state exactly.
 
 ## What a run actually costs
@@ -272,8 +273,8 @@ through the same two stages. What differed was how much of the repository the ag
 read before it could write anything — which is the argument for saying precisely what you
 want, and for `--pipeline auto` flagging a request too vague to start on.
 
-**`dev` is five stages, not two.** None of the numbers above are for the full line; expect a
-`dev` run to cost several times a `quick` one, and more again if it reworks. A judgment
+**A full line is four agent stages, not two.** None of the numbers above are for it; expect
+an `examples/reviewed.yaml` run to cost several times a `quick` one, and more again if it reworks. A judgment
 costs a fraction of a cent against any of this, which is the whole case for
 [`judge:`](#the-third-kind-of-stage-judge) stages.
 
@@ -321,8 +322,8 @@ A comparison may name a threshold instead of pinning a number — `above: $secre
 `typesafe.thresholds.secret` from the config. A gate that turns out to be too eager is then
 one edit for the whole installation, rather than the same edit in every questions file in
 every repo. A rule that writes a literal still wins, so a pipeline can pin the one number it
-cares about and let the installation tune the rest. The shipped `review-gate.yaml` and
-`achieved.yaml` are written this way.
+cares about and let the installation tune the rest. This repo's own
+`.sf/pipelines/prompts/human-review.yaml` is written this way.
 
 A `$name` the config does not define is a wiring bug and parks the request, naming the
 threshold it could not find. It is never read as zero: that would make a comparison fire on
@@ -362,10 +363,6 @@ still override `model:` for its own step; nothing else is per-step.
 
 `sf config --json` prints the whole block as it is in effect.
 
-Why it is worth a stage: a judgment over a diff costs about **$0.0002** against a review
-agent's **$1–2**, so a cheap gate before the expensive reviewer pays for itself the first time
-it sends an incomplete diff back to `code`. And unlike an agent's verdict, it is not the
-worker grading its own work.
 Why it is worth a stage, measured rather than asserted. Request 023 on this installation ran
 a `gate` judgment over a 7780-token diff for **$0.000327**, in the same run as a review agent
 that cost **$0.89**. That is the ratio to design around: roughly three thousand judgments to
@@ -382,14 +379,14 @@ The second reason is not about money. A judge is not the worker grading its own 
 never sees the conversation that produced the diff, only the diff — which is the one thing a
 review agent resuming the coder's session structurally cannot offer.
 
-**Opt-in, and it fails closed.** `dev` and `quick` do not use it. It needs `TYPESAFE_API_KEY`;
+**Opt-in, and it fails closed.** Only a step that says `uses: typesafe` calls it. It needs `TYPESAFE_API_KEY`;
 with no key, an HTTP error, a malformed answer or a rule about a question that was not
 answered, the step returns `human` and the request parks — the factory never guesses a
 verdict. Every step records `state.json`, `questions.json`, `answers.json` and `route.txt`, so
 `sf replay --step N` shows exactly what was asked and which rule fired.
 
-`software_factory/pipelines/judged.yaml` is `dev` with both placements wired up: a `gate` before
-`review`, and an `achieved` check before `commit`. The thresholds ship as a first guess and
+`examples/secret-gate.yaml` wires one in before `commit`, and this repo's own
+`.sf/pipelines/judged.yaml` gates the diff on `human-review.yaml`. The thresholds ship as a first guess and
 want calibrating against runs whose outcome you already know — which is `typesafe.thresholds`
 in the config, not a copy of the question files.
 

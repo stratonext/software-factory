@@ -78,7 +78,7 @@ $defs:
       uses:
         type: string
         description: >-
-          Which runner performs this step - a YAML file resolved from the repo's `agents/`,
+          Which runner performs this step - a YAML file resolved from the repo's `.sf/runners/`,
           then the installation's, then the packaged ones (`claude`, `shell`, `typesafe`).
           Omitted, the configured default runner applies. An unknown name fails at load.
       with:

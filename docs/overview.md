@@ -60,6 +60,5 @@ that lists every command and every YAML key.
 | Read this | When |
 |---|---|
 | [pipelines.md](pipelines.md) | You are **writing** a pipeline: stages, edges, rework, verdicts, judge steps, and what a run costs. |
-| [operating.md](operating.md) | You are **running** one. The states a request moves through, what every step records and how to replay it, and the failure modes that actually happen. |
 | [internals.md](internals.md) | You are **changing** the code, or writing a storage backend that is not a local directory. |
 | [pipeline-schema.yaml](pipeline-schema.yaml) | Your editor wants a schema for pipeline YAML. Documentation, not a second validator. |
